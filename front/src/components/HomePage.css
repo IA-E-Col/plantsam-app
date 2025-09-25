@@ -1,0 +1,122 @@
+.home-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  background-color: #ffffff;
+  width: 100vw;
+  margin: 0;
+}
+
+.home-page h1 {
+  color: #2c3e50;
+  margin-bottom: 3rem;
+  font-size: 3rem;
+  font-weight: 300;
+  width: 100%;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+.file-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+  width: 100%;
+  max-width: none;
+}
+
+.file-section p {
+  font-size: 1.2rem;
+  color: #555;
+}
+
+.browse-button {
+  margin: 1rem 0;
+}
+
+.browse-label {
+  display: inline-block;
+  padding: 1rem 2.5rem;
+  background-color: #3498db;
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-size: 1.1rem;
+  font-weight: 500;
+  border: none;
+}
+
+.browse-label:hover {
+  background-color: #2980b9;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.drop-zone {
+  border: 2px dashed #bdc3c7;
+  border-radius: 8px;
+  padding: 4rem 3rem;
+  margin: 1rem 0;
+  transition: all 0.3s;
+  width: 80%;
+  max-width: 800px;
+  text-align: center;
+  background-color: #f8f9fa;
+}
+
+.drop-zone:hover {
+  border-color: #3498db;
+  background-color: #ecf0f1;
+}
+
+.drop-zone.drag-over {
+  border-color: #3498db;
+  background-color: #e1f0fa;
+  transform: scale(1.02);
+}
+
+.start-section {
+  margin-top: 2rem;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.start-button {
+  padding: 1rem 3rem;
+  font-size: 1.3rem;
+  background-color: #2c3e50;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-weight: 500;
+  width: auto;
+}
+
+.start-button:hover:not(:disabled) {
+  background-color: #34495e;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+}
+
+.start-button:disabled {
+  background-color: #bdc3c7;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.selected-files {
+  margin-top: 1rem;
+  color: #7f8c8d;
+  width: 100%;
+  text-align: center;
+}
