@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import './CorrectionPage.css'
 
 interface Point {
@@ -10,114 +10,200 @@ interface Point {
 
 interface CorrectionPageProps {
   images: File[]
+  groupId: string
   onBack: () => void
 }
 
-function CorrectionPage({ images, onBack }: CorrectionPageProps) {
+function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
   const [pointType, setPointType] = useState<'positive' | 'negative'>('positive')
   const [points, setPoints] = useState<Point[]>([])
+  const [processedImageUrl, setProcessedImageUrl] = useState<string>('')
+  const [isLoading, setIsLoading] = useState(false)
   const imageRef = useRef<HTMLImageElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
   const pointIdCounter = useRef(0)
 
   const currentImage = images[currentImageIndex]
 
-  const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!containerRef.current) return
+  const loadProcessedImage = async () => {
+    if (!groupId) return
 
-    const container = containerRef.current
-    const rect = container.getBoundingClientRect()
-    
-    // Calculer les coordonnées du clic par rapport au conteneur
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-    
-    // Vérifier que le clic est bien dans le conteneur
-    if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
-      const newPoint: Point = {
-        x,
-        y,
-        type: pointType,
-        id: pointIdCounter.current++
-      }
+    setIsLoading(true)
+    try {
+      const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`)
       
-      setPoints(prevPoints => [...prevPoints, newPoint])
+      if (response.ok) {
+        const blob = await response.blob()
+        const url = URL.createObjectURL(blob)
+        setProcessedImageUrl(url)
+      } else {
+        setProcessedImageUrl(URL.createObjectURL(currentImage))
+      }
+    } catch (error) {
+      console.error('Erreur lors du chargement de l\'image traitée:', error)
+      setProcessedImageUrl(URL.createObjectURL(currentImage))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (groupId && images.length > 0) {
+      loadProcessedImage()
+    }
+  }, [groupId, currentImageIndex, images.length])
+
+  const handleImageClick = async (e: React.MouseEvent<HTMLImageElement>) => {
+    if (!imageRef.current || !groupId) return
+
+    const img = imageRef.current
+    const rect = img.getBoundingClientRect()
+    
+    const clickX = e.nativeEvent.offsetX
+    const clickY = e.nativeEvent.offsetY
+    
+    console.log(`Clic sur l'image: (${clickX}, ${clickY})`)
+
+    const naturalWidth = img.naturalWidth
+    const naturalHeight = img.naturalHeight
+    const displayedWidth = rect.width
+    const displayedHeight = rect.height
+    
+    const scaleX = naturalWidth / displayedWidth
+    const scaleY = naturalHeight / displayedHeight
+    const scale = Math.max(scaleX, scaleY)
+    
+    const imageX = clickX * scale
+    const imageY = clickY * scale
+    
+    const xPercent = (imageX / naturalWidth) * 100
+    const yPercent = (imageY / naturalHeight) * 100
+    
+    console.log(`Coordonnées calculées: Image (${imageX}, ${imageY}) -> Pourcentage: (${xPercent}%, ${yPercent}%)`)
+
+    const container = img.parentElement
+    if (!container) return
+    
+    const containerRect = container.getBoundingClientRect()
+    const xInContainer = clickX + (rect.left - containerRect.left)
+    const yInContainer = clickY + (rect.top - containerRect.top)
+
+    const newPoint: Point = {
+      x: xInContainer,
+      y: yInContainer,
+      type: pointType,
+      id: pointIdCounter.current++
+    }
+    
+    setPoints(prevPoints => [...prevPoints, newPoint])
+
+    try {
+      const endpoint = pointType === 'positive' ? 'positive' : 'negative'
+      
+      const response = await fetch(
+        `/api/files/group/${groupId}/${currentImageIndex}/point/${endpoint}?x=${Math.round(xPercent)}&y=${Math.round(yPercent)}`,
+        {
+          method: 'POST'
+        }
+      )
+
+      if (response.ok) {
+        console.log(`Point ${pointType} ajouté avec succès`)
+        await loadProcessedImage()
+      } else {
+        console.error('Erreur lors de l\'ajout du point:', response.status)
+      }
+    } catch (error) {
+      console.error('Erreur API:', error)
     }
   }
 
   const clearPoints = () => {
     setPoints([])
+    loadProcessedImage()
   }
 
-  const savePoints = () => {
-    // Préparer les données à sauvegarder
-    const saveData = {
-      imageIndex: currentImageIndex,
-      imageName: images[currentImageIndex].name,
-      points: points,
-      timestamp: new Date().toISOString()
+  const downloadProcessedImage = async () => {
+    if (!processedImageUrl) {
+      alert('Aucune image traitée à télécharger')
+      return
     }
-    
-    // Pour l'instant, on affiche juste les données dans la console
-    console.log('Données à sauvegarder:', saveData)
-    
-    // Ici vous pourrez ajouter la logique pour envoyer les données au serveur
-    alert(`Points sauvegardés pour l'image ${currentImageIndex + 1}! (Voir la console pour les détails)`)
+
+    try {
+      const response = await fetch(processedImageUrl)
+      const blob = await response.blob()
+      
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.style.display = 'none'
+      a.href = url
+      
+      const originalName = images[currentImageIndex].name
+      const nameWithoutExtension = originalName.replace(/\.[^/.]+$/, "")
+      const extension = 'png'
+      a.download = `${nameWithoutExtension}_segmented_${Date.now()}.${extension}`
+      
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+      
+      alert('Image téléchargée avec succès!')
+    } catch (error) {
+      console.error('Erreur lors du téléchargement:', error)
+      alert('Erreur lors du téléchargement de l\'image')
+    }
   }
 
-  const nextImage = () => {
-    if (currentImageIndex < images.length - 1) {
-      setCurrentImageIndex(currentImageIndex + 1)
-      setPoints([])
-    }
-  }
-
-  const prevImage = () => {
-    if (currentImageIndex > 0) {
-      setCurrentImageIndex(currentImageIndex - 1)
-      setPoints([])
-    }
+  if (!groupId) {
+    return (
+      <div className="correction-page">
+        <div style={{ padding: '2rem', textAlign: 'center' }}>
+          <h2>Erreur: GroupId non défini</h2>
+          <button onClick={onBack}>Retour à l'accueil</button>
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="correction-page">
       <header className="correction-header">
         <h1>PlantSAM</h1>
-        <button className="back-button" onClick={onBack}>
-          Back
-        </button>
+        <div>
+          <span style={{ marginRight: '1rem', color: '#666' }}>
+            Group: {groupId.substring(0, 8)}...
+          </span>
+          <button className="back-button" onClick={onBack}>
+            Back
+          </button>
+        </div>
       </header>
 
       <div className="correction-content">
         <div className="images-section">
           <div className="image-container">
-            <h3>Original Image</h3>
+            <h3>Segmented Image {isLoading && '(Loading...)'}</h3>
             <div className="image-wrapper">
               <img 
-                src={URL.createObjectURL(currentImage)} 
-                alt="Original" 
+                src={processedImageUrl || URL.createObjectURL(currentImage)} 
+                alt="Segmented" 
                 className="correction-image"
               />
             </div>
           </div>
           
           <div className="image-container">
-            <h3>Segmented Image</h3>
-            <div 
-              ref={containerRef}
-              className="image-wrapper" 
-              onClick={handleImageClick}
-              style={{ position: 'relative', cursor: 'crosshair' }}
-            >
+            <h3>Original Image</h3>
+            <div className="image-wrapper" style={{ position: 'relative' }}>
               <img 
+                ref={imageRef}
                 src={URL.createObjectURL(currentImage)} 
-                alt="Segmented" 
-                className="correction-image"
-                style={{ pointerEvents: 'none' }}
+                alt="Original" 
+                className="correction-image clickable-image"
+                onClick={handleImageClick}
               />
               
-              {/* Points placés sur l'image */}
               {points.map(point => (
                 <div
                   key={point.id}
@@ -130,7 +216,6 @@ function CorrectionPage({ images, onBack }: CorrectionPageProps) {
                 />
               ))}
             </div>
-            <p>Image {currentImageIndex + 1} of {images.length}</p>
           </div>
         </div>
 
@@ -168,24 +253,14 @@ function CorrectionPage({ images, onBack }: CorrectionPageProps) {
             </button>
           </div>
 
-          <p className="instruction">Click on the segmented image to place correction points</p>
+          <p className="instruction">Click on the original image to place correction points</p>
 
           <div className="save-section">
             <button 
               className="save-button" 
-              onClick={savePoints}
-              disabled={points.length === 0}
+              onClick={downloadProcessedImage}
             >
-              Save Points
-            </button>
-          </div>
-
-          <div className="navigation-buttons">
-            <button onClick={prevImage} disabled={currentImageIndex === 0}>
-              Previous
-            </button>
-            <button onClick={nextImage} disabled={currentImageIndex === images.length - 1}>
-              Next
+              Download Segmented Image
             </button>
           </div>
         </div>

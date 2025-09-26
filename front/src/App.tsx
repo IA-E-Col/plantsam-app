@@ -8,18 +8,32 @@ type Page = 'home' | 'correction'
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>('home')
   const [selectedImages, setSelectedImages] = useState<File[]>([])
+  const [groupId, setGroupId] = useState<string>('')
+
+  const handleImagesSelected = (images: File[], newGroupId: string) => {
+    console.log('App: Images selected with groupId:', newGroupId)
+    setSelectedImages(images)
+    setGroupId(newGroupId)
+    setCurrentPage('correction')
+  }
+
+  const handleBack = () => {
+    setCurrentPage('home')
+    setSelectedImages([])
+    setGroupId('')
+  }
 
   return (
     <div className="app">
       {currentPage === 'home' ? (
         <HomePage 
-          onImagesSelected={setSelectedImages}
-          onProceed={() => setCurrentPage('correction')}
+          onImagesSelected={handleImagesSelected}
         />
       ) : (
         <CorrectionPage 
           images={selectedImages}
-          onBack={() => setCurrentPage('home')}
+          groupId={groupId}
+          onBack={handleBack}
         />
       )}
     </div>
