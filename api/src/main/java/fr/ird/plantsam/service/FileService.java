@@ -243,6 +243,94 @@ public class FileService {
         return true;
     }
 
+    public boolean segmentWithPoints(String groupId, int fileIndex, String positivePoints, String negativePoints) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        System.out.println("Segment avec points - Positifs: " + positivePoints + ", Négatifs: " + negativePoints);
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+        body.add("positive_points", positivePoints);
+        body.add("negative_points", negativePoints);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        String url = "http://localhost:8000/segment_with_points";
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String processedFileName = "segmented_with_points_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Erreur lors de l'appel à l'API Python: " + e.getMessage());
+        }
+        return false;
+    }
+
+    public boolean clearPoints(String groupId, int fileIndex) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        String url = "http://localhost:8000/clear_points";
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String processedFileName = "cleared_points_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Erreur lors de l'appel à l'API Python: " + e.getMessage());
+        }
+        return false;
+    }
+
     private static class FileGroup {
         @Getter String groupName;
         private final Map<Integer, String> originalFiles = new HashMap<>();

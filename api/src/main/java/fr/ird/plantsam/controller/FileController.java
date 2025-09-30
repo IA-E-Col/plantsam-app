@@ -73,6 +73,26 @@ public class FileController {
         return ResponseEntity.badRequest().body("Error applying negative point");
     }
 
+    @PostMapping("/group/{groupId}/{fileId}/segment_with_points")
+    public ResponseEntity<String> segmentWithPoints(@PathVariable("groupId") String groupId,
+                                                    @PathVariable("fileId") int fileId,
+                                                    @RequestParam("positivePoints") String positivePoints,
+                                                    @RequestParam("negativePoints") String negativePoints) throws IOException {
+        if (fileService.segmentWithPoints(groupId, fileId, positivePoints, negativePoints)) {
+            return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"segmentation with points applied\"}");
+        }
+        return ResponseEntity.badRequest().body("Error applying segmentation with points");
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/clear_points")
+    public ResponseEntity<String> clearPoints(@PathVariable("groupId") String groupId,
+                                              @PathVariable("fileId") int fileId) throws IOException {
+        if (fileService.clearPoints(groupId, fileId)) {
+            return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"points cleared\"}");
+        }
+        return ResponseEntity.badRequest().body("Error clearing points");
+    }
+
     @GetMapping("/group/{groupId}/{fileId}/result")
     public ResponseEntity<byte[]> getProcessedImage(@PathVariable("groupId") String groupId,
                                                     @PathVariable("fileId") int fileId) {

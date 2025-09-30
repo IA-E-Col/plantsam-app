@@ -50,8 +50,39 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
   useEffect(() => {
     if (groupId && images.length > 0) {
       loadProcessedImage()
+      setPoints([])
     }
   }, [groupId, currentImageIndex, images.length])
+
+  const applySegmentationWithPoints = async (pointsList: Point[]) => {
+    if (!groupId) return
+
+    try {
+      const positivePoints = pointsList.filter(p => p.type === 'positive').map(p => [p.x, p.y])
+      const negativePoints = pointsList.filter(p => p.type === 'negative').map(p => [p.x, p.y])
+
+      const formData = new FormData()
+      formData.append('positivePoints', JSON.stringify(positivePoints))
+      formData.append('negativePoints', JSON.stringify(negativePoints))
+      
+      const response = await fetch(
+        `/api/files/group/${groupId}/${currentImageIndex}/segment_with_points`,
+        {
+          method: 'POST',
+          body: formData
+        }
+      )
+
+      if (response.ok) {
+        console.log('Segmentation avec points appliquée avec succès')
+        await loadProcessedImage()
+      } else {
+        console.error('Erreur lors de la segmentation avec points:', response.status)
+      }
+    } catch (error) {
+      console.error('Erreur API:', error)
+    }
+  }
 
   const handleImageClick = async (e: React.MouseEvent<HTMLImageElement>) => {
     if (!imageRef.current || !groupId) return
@@ -77,53 +108,77 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     
     console.log(`Coordonnées calculées en pixels: (${imageX}, ${imageY})`)
 
-    const container = img.parentElement
-    if (!container) return
-    
-    const containerRect = container.getBoundingClientRect()
-    const xInContainer = clickX + (rect.left - containerRect.left)
-    const yInContainer = clickY + (rect.top - containerRect.top)
+    const displayX = clickX
+    const displayY = clickY
 
     const newPoint: Point = {
-        x: xInContainer,
-        y: yInContainer,
-        type: pointType,
-        id: pointIdCounter.current++
+      x: displayX,
+      y: displayY,
+      type: pointType,
+      id: pointIdCounter.current++
     }
     
-    setPoints(prevPoints => [...prevPoints, newPoint])
+    const newPoints = [...points, newPoint]
+    setPoints(newPoints)
+    
+    await applySegmentationWithPoints(newPoints.map(p => ({
+      ...p,
+      x: Math.round(p.x * scaleX),
+      y: Math.round(p.y * scaleY)
+    })))
+  }
 
-    try {
-        const endpoint = pointType === 'positive' ? 'positive' : 'negative'
+  const undoLastPoint = async () => {
+    if (points.length === 0) return
+    
+    const newPoints = points.slice(0, -1)
+    setPoints(newPoints)
+    
+    if (newPoints.length === 0) {
+      await clearPoints()
+    } else {
+      if (imageRef.current) {
+        const img = imageRef.current
+        const rect = img.getBoundingClientRect()
+        const naturalWidth = img.naturalWidth
+        const naturalHeight = img.naturalHeight
+        const displayedWidth = rect.width
+        const displayedHeight = rect.height
+        const scaleX = naturalWidth / displayedWidth
+        const scaleY = naturalHeight / displayedHeight
         
-        const response = await fetch(
-            `/api/files/group/${groupId}/${currentImageIndex}/point/${endpoint}?x=${imageX}&y=${imageY}`,
-            {
-                method: 'POST'
-            }
-        )
-
-        if (response.ok) {
-            console.log(`Point ${pointType} ajouté avec succès`)
-            await loadProcessedImage()
-        } else {
-            console.error('Erreur lors de l\'ajout du point:', response.status)
-            const errorText = await response.text()
-            console.error('Détails de l\'erreur:', errorText)
-        }
-    } catch (error) {
-        console.error('Erreur API:', error)
+        await applySegmentationWithPoints(newPoints.map(p => ({
+          ...p,
+          x: Math.round(p.x * scaleX),
+          y: Math.round(p.y * scaleY)
+        })))
+      }
     }
-}
+  }
 
-  const clearPoints = () => {
-    setPoints([])
-    loadProcessedImage()
+  const clearPoints = async () => {
+    try {
+      const response = await fetch(
+        `/api/files/group/${groupId}/${currentImageIndex}/clear_points`,
+        {
+          method: 'POST'
+        }
+      )
+
+      if (response.ok) {
+        console.log('Points effacés avec succès')
+        setPoints([])
+        await loadProcessedImage()
+      } else {
+        console.error('Erreur lors de l\'effacement des points:', response.status)
+      }
+    } catch (error) {
+      console.error('Erreur API:', error)
+    }
   }
 
   const downloadProcessedImage = async () => {
     if (!processedImageUrl) {
-      alert('Aucune image traitée à télécharger')
       return
     }
 
@@ -145,11 +200,8 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
-      
-      alert('Image téléchargée avec succès!')
     } catch (error) {
       console.error('Erreur lors du téléchargement:', error)
-      alert('Erreur lors du téléchargement de l\'image')
     }
   }
 
@@ -208,9 +260,10 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                   className={`point ${point.type}-point`}
                   style={{
                     position: 'absolute',
-                    left: point.x - 6,
-                    top: point.y - 6,
+                    left: point.x - 4,
+                    top: point.y - 4,
                   }}
+                  title={`${point.type} point`}
                 />
               ))}
             </div>
@@ -245,22 +298,38 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
           </div>
 
           <div className="points-info">
-            <p>Points placed: {points.length}</p>
-            <button className="clear-button" onClick={clearPoints}>
-              Clear Points
-            </button>
+            <p>Points: {points.length} (✓{points.filter(p => p.type === 'positive').length} ✗{points.filter(p => p.type === 'negative').length})</p>
           </div>
 
-          <p className="instruction">Click on the original image to place correction points</p>
-
-          <div className="save-section">
+          <div className="action-buttons">
             <button 
-              className="save-button" 
+              className="control-button undo-button" 
+              onClick={undoLastPoint}
+              disabled={points.length === 0}
+            >
+              Undo Last Point
+            </button>
+            
+            <button 
+              className="control-button clear-button" 
+              onClick={clearPoints}
+              disabled={points.length === 0}
+            >
+              Clear All Points
+            </button>
+
+            <button 
+              className="control-button download-button" 
               onClick={downloadProcessedImage}
+              disabled={!processedImageUrl}
             >
               Download Segmented Image
             </button>
           </div>
+
+          <p className="instruction">
+            Click on the original image to place correction points.
+          </p>
         </div>
       </div>
     </div>
