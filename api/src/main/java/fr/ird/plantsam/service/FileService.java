@@ -114,14 +114,13 @@ public class FileService {
         HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
         ResponseEntity<byte[]> response = restTemplate.exchange(
-                "http://localhost:8000/process", // API Python
+                "http://localhost:8000/process",
                 HttpMethod.POST,
                 requestEntity,
                 byte[].class
         );
 
         if (response.getStatusCode() == HttpStatus.OK) {
-            // Sauvegarder l’image résultante
             String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
             Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
             Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
@@ -139,14 +138,16 @@ public class FileService {
         String originalFilePath = group.getOriginalFilePath(fileIndex);
         if (originalFilePath == null) return false;
 
+        System.out.println("Coordonnées reçues du frontend: x=" + x + ", y=" + y);
+        System.out.println("Fichier à envoyer: " + originalFilePath);
+
         RestTemplate restTemplate = new RestTemplate();
 
-        // Requête multipart avec file + coordonnées
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
         body.add("file", fileResource);
-        body.add("x", x);
-        body.add("y", y);
+        body.add("x", String.valueOf(x));
+        body.add("y", String.valueOf(y));
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
@@ -157,21 +158,25 @@ public class FileService {
                 ? "http://localhost:8000/positive_point"
                 : "http://localhost:8000/negative_point";
 
-        ResponseEntity<byte[]> response = restTemplate.exchange(
-                url,
-                HttpMethod.POST,
-                requestEntity,
-                byte[].class
-        );
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
 
-        if (response.getStatusCode() == HttpStatus.OK) {
-            String suffix = positive ? "positive" : "negative";
-            String processedFileName = suffix + "_processed_" + Paths.get(originalFilePath).getFileName();
-            Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-            Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String suffix = positive ? "positive" : "negative";
+                String processedFileName = suffix + "_processed_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
-            group.addProcessedFile(fileIndex, processedFile.toString());
-            return true;
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Erreur lors de l'appel à l'API Python: " + e.getMessage());
         }
         return false;
     }
@@ -238,7 +243,6 @@ public class FileService {
         return true;
     }
 
-    // Class to manage a group of files
     private static class FileGroup {
         @Getter String groupName;
         private final Map<Integer, String> originalFiles = new HashMap<>();

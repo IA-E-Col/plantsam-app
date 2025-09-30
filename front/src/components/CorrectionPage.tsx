@@ -71,15 +71,11 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     
     const scaleX = naturalWidth / displayedWidth
     const scaleY = naturalHeight / displayedHeight
-    const scale = Math.max(scaleX, scaleY)
     
-    const imageX = clickX * scale
-    const imageY = clickY * scale
+    const imageX = Math.round(clickX * scaleX)
+    const imageY = Math.round(clickY * scaleY)
     
-    const xPercent = (imageX / naturalWidth) * 100
-    const yPercent = (imageY / naturalHeight) * 100
-    
-    console.log(`Coordonnées calculées: Image (${imageX}, ${imageY}) -> Pourcentage: (${xPercent}%, ${yPercent}%)`)
+    console.log(`Coordonnées calculées en pixels: (${imageX}, ${imageY})`)
 
     const container = img.parentElement
     if (!container) return
@@ -89,34 +85,36 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const yInContainer = clickY + (rect.top - containerRect.top)
 
     const newPoint: Point = {
-      x: xInContainer,
-      y: yInContainer,
-      type: pointType,
-      id: pointIdCounter.current++
+        x: xInContainer,
+        y: yInContainer,
+        type: pointType,
+        id: pointIdCounter.current++
     }
     
     setPoints(prevPoints => [...prevPoints, newPoint])
 
     try {
-      const endpoint = pointType === 'positive' ? 'positive' : 'negative'
-      
-      const response = await fetch(
-        `/api/files/group/${groupId}/${currentImageIndex}/point/${endpoint}?x=${Math.round(xPercent)}&y=${Math.round(yPercent)}`,
-        {
-          method: 'POST'
-        }
-      )
+        const endpoint = pointType === 'positive' ? 'positive' : 'negative'
+        
+        const response = await fetch(
+            `/api/files/group/${groupId}/${currentImageIndex}/point/${endpoint}?x=${imageX}&y=${imageY}`,
+            {
+                method: 'POST'
+            }
+        )
 
-      if (response.ok) {
-        console.log(`Point ${pointType} ajouté avec succès`)
-        await loadProcessedImage()
-      } else {
-        console.error('Erreur lors de l\'ajout du point:', response.status)
-      }
+        if (response.ok) {
+            console.log(`Point ${pointType} ajouté avec succès`)
+            await loadProcessedImage()
+        } else {
+            console.error('Erreur lors de l\'ajout du point:', response.status)
+            const errorText = await response.text()
+            console.error('Détails de l\'erreur:', errorText)
+        }
     } catch (error) {
-      console.error('Erreur API:', error)
+        console.error('Erreur API:', error)
     }
-  }
+}
 
   const clearPoints = () => {
     setPoints([])

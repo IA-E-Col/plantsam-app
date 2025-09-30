@@ -115,7 +115,7 @@ function HomePage({ onImagesSelected }: HomePageProps) {
 
   return (
     <div className="home-page">
-      <h1>PlantsAM</h1>
+      <h1>PlantSAM</h1>
       
       <div className="file-section">
         <p>Select the images to be processed</p>

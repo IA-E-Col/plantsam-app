@@ -66,7 +66,7 @@ def segment_with_point_prompt(image_bytes: bytes, x: int, y: int, label: int):
     predictor.set_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
 
     point_coords = np.array([[x, y]])
-    point_labels = np.array([label])  # 1 = objet, 0 = fond
+    point_labels = np.array([label])
 
     with torch.no_grad():
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -96,10 +96,10 @@ async def positive_point(
         x: int = Form(...),
         y: int = Form(...)
 ):
+    print(f"Point positif reçu: x={x}, y={y}")
     image_bytes = await file.read()
     buf = segment_with_point_prompt(image_bytes, x, y, label=1)
     return StreamingResponse(buf, media_type="image/png")
-
 
 @app.post("/negative_point")
 async def negative_point(
@@ -107,6 +107,7 @@ async def negative_point(
         x: int = Form(...),
         y: int = Form(...)
 ):
+    print(f"Point négatif reçu: x={x}, y={y}")
     image_bytes = await file.read()
     buf = segment_with_point_prompt(image_bytes, x, y, label=0)
     return StreamingResponse(buf, media_type="image/png")
