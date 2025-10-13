@@ -74,14 +74,24 @@ public class FileController {
     }
 
     @PostMapping("/group/{groupId}/{fileId}/segment_with_points")
-    public ResponseEntity<String> segmentWithPoints(@PathVariable("groupId") String groupId,
+    public ResponseEntity<byte[]> segmentWithPoints(@PathVariable("groupId") String groupId,
                                                     @PathVariable("fileId") int fileId,
                                                     @RequestParam("positivePoints") String positivePoints,
-                                                    @RequestParam("negativePoints") String negativePoints) throws IOException {
-        if (fileService.segmentWithPoints(groupId, fileId, positivePoints, negativePoints)) {
-            return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"segmentation with points applied\"}");
+                                                    @RequestParam("negativePoints") String negativePoints,
+                                                    @RequestParam("startType") String startType) throws IOException {
+        try {
+            if (fileService.segmentWithPoints(groupId, fileId, positivePoints, negativePoints, startType)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
         }
-        return ResponseEntity.badRequest().body("Error applying segmentation with points");
     }
 
     @PostMapping("/group/{groupId}/{fileId}/clear_points")
@@ -137,6 +147,100 @@ public class FileController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("File deletion error: " + e.getMessage());
         }
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/segment_union")
+    public ResponseEntity<byte[]> segmentUnion(@PathVariable("groupId") String groupId,
+                                               @PathVariable("fileId") int fileId,
+                                               @RequestParam("x") int x,
+                                               @RequestParam("y") int y,
+                                               @RequestParam("pointCount") int pointCount,
+                                               @RequestParam("startType") String startType) throws IOException {
+        try {
+            if (fileService.segmentUnion(groupId, fileId, x, y, pointCount, startType)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/segment_intersection")
+    public ResponseEntity<byte[]> segmentIntersection(@PathVariable("groupId") String groupId,
+                                                      @PathVariable("fileId") int fileId,
+                                                      @RequestParam("x") int x,
+                                                      @RequestParam("y") int y,
+                                                      @RequestParam("pointCount") int pointCount,
+                                                      @RequestParam("startType") String startType) throws IOException {
+        try {
+            if (fileService.segmentIntersection(groupId, fileId, x, y, pointCount, startType)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/save_negative_point")
+    public ResponseEntity<String> saveNegativePointResult(@PathVariable("groupId") String groupId,
+                                                          @PathVariable("fileId") int fileId,
+                                                          @RequestBody byte[] imageData) throws IOException {
+        if (fileService.saveNegativePointResult(groupId, fileId, imageData)) {
+            return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"negative point result saved\"}");
+        }
+        return ResponseEntity.badRequest().body("Error saving negative point result");
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/save_step")
+    public ResponseEntity<String> saveStepImage(@PathVariable("groupId") String groupId,
+                                                @PathVariable("fileId") int fileId,
+                                                @RequestParam("stepName") String stepName,
+                                                @RequestBody byte[] imageData) throws IOException {
+        if (fileService.saveStepImage(groupId, fileId, imageData, stepName)) {
+            return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"step image saved\"}");
+        }
+        return ResponseEntity.badRequest().body("Error saving step image");
+    }
+
+    @GetMapping("/group/{groupId}/{fileId}/step/{stepName}")
+    public ResponseEntity<byte[]> getStepImage(@PathVariable("groupId") String groupId,
+                                               @PathVariable("fileId") int fileId,
+                                               @PathVariable("stepName") String stepName) {
+        try {
+            byte[] fileData = fileService.getStepImage(groupId, fileId, stepName);
+            if (fileData == null) {
+                return ResponseEntity.notFound().build();
+            }
+
+            return ResponseEntity.ok()
+                    .header("Content-Type", "application/octet-stream")
+                    .body(fileData);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
+
+    @PostMapping("/group/{groupId}/selected")
+    public ResponseEntity<String> sendSelected(@PathVariable("groupId") String groupId,
+                                                   @PathVariable("fileId") int fileId,
+                                                   @RequestParam("x") int x,
+                                                   @RequestParam("y") int y) throws IOException {
+        if (fileService.setPoint(groupId, fileId, x, y, true)) {
+            return ResponseEntity.ok("{\"status\": \"success\", \"url\": \"url here\"}");
+        }
+        return ResponseEntity.badRequest().body("Error applying positive point");
     }
 
 }

@@ -182,7 +182,6 @@ public class FileService {
     }
 
 
-
     public byte[] getProcessedImage(String groupId, int fileIndex) {
         try {
             FileGroup group = fileGroups.get(groupId);
@@ -243,14 +242,14 @@ public class FileService {
         return true;
     }
 
-    public boolean segmentWithPoints(String groupId, int fileIndex, String positivePoints, String negativePoints) throws IOException {
+    public boolean segmentWithPoints(String groupId, int fileIndex, String positivePoints, String negativePoints, String startType) throws IOException {
         FileGroup group = fileGroups.get(groupId);
         if (group == null) return false;
 
         String originalFilePath = group.getOriginalFilePath(fileIndex);
         if (originalFilePath == null) return false;
 
-        System.out.println("Segment avec points - Positifs: " + positivePoints + ", Négatifs: " + negativePoints);
+        System.out.println("Segment avec points - Positifs: " + positivePoints + ", Négatifs: " + negativePoints + ", StartType: " + startType);
 
         RestTemplate restTemplate = new RestTemplate();
 
@@ -259,6 +258,7 @@ public class FileService {
         body.add("file", fileResource);
         body.add("positive_points", positivePoints);
         body.add("negative_points", negativePoints);
+        body.add("start_type", startType);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
@@ -277,6 +277,107 @@ public class FileService {
 
             if (response.getStatusCode() == HttpStatus.OK) {
                 String processedFileName = "segmented_with_points_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Erreur lors de l'appel à l'API Python: " + e.getMessage());
+        }
+        return false;
+    }
+
+    public boolean segmentUnion(String groupId, int fileIndex, int x, int y, int pointCount, String startType) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+
+        System.out.println("Segment union - Point: (" + x + ", " + y + "), Count: " + pointCount + ", StartType: " + startType);
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+        body.add("x", String.valueOf(x));
+        body.add("y", String.valueOf(y));
+        body.add("point_count", String.valueOf(pointCount));
+        body.add("start_type", startType);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        String url = "http://localhost:8000/segment_union";
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                System.out.println("Segment union: succès, image traitée sauvegardée");
+                String processedFileName = "union_segmented_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            } else {
+                System.out.println("Segment union: échec, statut HTTP: " + response.getStatusCode());
+                return false;
+            }
+        } catch (Exception e) {
+            System.err.println("Erreur lors de l'appel à l'API Python: " + e.getMessage());
+        }
+        return false;
+    }
+
+    public boolean segmentIntersection(String groupId, int fileIndex, int x, int y, int pointCount, String startType) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        System.out.println("Segment intersection - Point: (" + x + ", " + y + "), Count: " + pointCount + ", StartType: " + startType);
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+        body.add("x", String.valueOf(x));
+        body.add("y", String.valueOf(y));
+        body.add("point_count", String.valueOf(pointCount));
+        body.add("start_type", startType);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        String url = "http://localhost:8000/segment_intersection";
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String processedFileName = "intersection_segmented_" + Paths.get(originalFilePath).getFileName();
                 Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
@@ -329,6 +430,58 @@ public class FileService {
             System.err.println("Erreur lors de l'appel à l'API Python: " + e.getMessage());
         }
         return false;
+    }
+
+    public boolean saveNegativePointResult(String groupId, int fileIndex, byte[] imageData) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        String processedFileName = "negative_point_" + Paths.get(originalFilePath).getFileName();
+        Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+        Files.write(processedFile, imageData, StandardOpenOption.CREATE);
+
+        group.addProcessedFile(fileIndex, processedFile.toString());
+        return true;
+    }
+
+    public boolean saveStepImage(String groupId, int fileIndex, byte[] imageData, String stepName) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        String stepFileName = stepName + "_" + Paths.get(originalFilePath).getFileName();
+        Path stepFile = group.getProcessedDirPath().resolve(stepFileName);
+
+        System.out.println("Sauvegarde de l'étape: " + stepFile.toAbsolutePath());
+
+        Files.write(stepFile, imageData, StandardOpenOption.CREATE);
+        group.addProcessedFile(fileIndex, stepFile.toString());
+        return true;
+    }
+
+    public byte[] getStepImage(String groupId, int fileIndex, String stepName) {
+        try {
+            FileGroup group = fileGroups.get(groupId);
+            if (group == null) return null;
+
+            String originalFilePath = group.getOriginalFilePath(fileIndex);
+            if (originalFilePath == null) return null;
+
+            String stepFileName = stepName + "_" + Paths.get(originalFilePath).getFileName();
+            Path stepFile = group.getProcessedDirPath().resolve(stepFileName);
+
+            if (Files.exists(stepFile)) {
+                return Files.readAllBytes(stepFile);
+            }
+            return null;
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     private static class FileGroup {

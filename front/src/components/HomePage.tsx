@@ -21,7 +21,6 @@ function HomePage({ onImagesSelected }: HomePageProps) {
 
     try {
       console.log('Étape 1: Création du groupe...')
-      // Create group
       const groupResponse = await fetch('/api/files/group', {
         method: 'POST',
         headers: {
@@ -39,7 +38,6 @@ function HomePage({ onImagesSelected }: HomePageProps) {
       setGroupId(newGroupId)
       console.log('Groupe créé avec ID:', newGroupId)
 
-      // Upload files
       console.log('Étape 2: Upload des fichiers...')
       const formData = new FormData()
       fileArray.forEach(file => {
@@ -71,7 +69,6 @@ function HomePage({ onImagesSelected }: HomePageProps) {
 
     setIsProcessing(true)
     try {
-      // Process image
       console.log('Étape 3: Traitement de l\'image...')
       const processResponse = await fetch(`/api/files/group/${groupId}/0/process`, {
         method: 'POST'
