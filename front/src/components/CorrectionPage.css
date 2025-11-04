@@ -161,6 +161,16 @@
     color: #495057;
     font-size: 0.9rem;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.image-container h3.image-header .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
 }
 
 .image-wrapper {
@@ -170,6 +180,8 @@
     overflow: hidden;
     flex: 1;
     min-height: 0;
+    padding: 0;
+    margin: 0;
 }
 
 .correction-image {
@@ -177,6 +189,9 @@
     height: 100%;
     object-fit: contain;
     display: block;
+    margin: 0;
+    padding: 0;
+    border: none;
 }
 
 .clickable-image {
@@ -197,6 +212,7 @@
     z-index: 10;
     transition: all 0.2s ease;
     animation: pointAppear 0.2s ease-out;
+    position: absolute;
 }
 
 @keyframes pointAppear {
@@ -224,8 +240,8 @@
 .correction-sidebar {
     display: flex;
     flex-direction: column;
-    gap: 0.8rem;
-    width: 200px;
+    gap: 0.6rem;
+    width: 190px;
     flex-shrink: 0;
     height: fit-content;
 }
@@ -236,54 +252,55 @@
     width: 100%;
     background: white;
     border-radius: 4px;
-    padding: 0.8rem;
+    padding: 0.6rem;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
 .correction-controls h3,
 .correction-methods h3,
 .correction-start h3 {
-    margin: 0 0 0.8rem 0;
+    margin: 0 0 0.6rem 0;
     color: #495057;
-    font-size: 1rem;
+    font-size: 0.9rem;
     border-bottom: 1px solid #e9ecef;
-    padding-bottom: 0.4rem;
+    padding-bottom: 0.3rem;
 }
+
 
 .point-selector {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    margin-bottom: 0.8rem;
+    gap: 0.4rem;
+    margin-bottom: 0.6rem;
 }
 
 .point-selector label {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.3rem;
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     color: #495057;
 }
 
 .point-selector input[type="radio"] {
     margin: 0;
-    transform: scale(0.9);
+    transform: scale(0.85);
 }
 
 .action-buttons {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.4rem;
     margin-bottom: 0;
 }
 
 .control-button {
-    padding: 0.5rem 0.6rem;
+    padding: 0.4rem 0.5rem;
     border: none;
     border-radius: 3px;
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     font-weight: 500;
     transition: all 0.2s ease;
     text-align: center;
@@ -573,4 +590,422 @@
 
 .rectangle-button:hover {
     background-color: #0056b3;
+}
+
+.rectangle-mode {
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    -webkit-user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+    user-drag: none;
+}
+
+.rectangle-mode * {
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+.image-wrapper.rectangle-active {
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+.rectangle-preview {
+    border: 1px dashed #dc3545 !important;
+    background-color: rgba(220, 53, 69, 0.1) !important;
+}
+
+.rectangle-final {
+    border: 1px solid #dc3545 !important;
+    background-color: rgba(220, 53, 69, 0.2) !important;
+}
+
+.rectangle-preview,
+.rectangle-final {
+    position: absolute;
+    pointer-events: none;
+    z-index: 9;
+}
+
+.point {
+    z-index: 6;
+}
+
+.manual-noise-removal-button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 0.5rem 0.6rem;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background-color 0.2s;
+    margin-bottom: 0.5rem;
+    width: 100%;
+}
+
+.manual-noise-removal-button:hover:not(:disabled) {
+    background-color: #0056b3;
+}
+
+.manual-noise-removal-button:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.cancel-rectangle-button {
+    background-color: #6c757d;
+    color: white;
+    border: none;
+    padding: 0.5rem 0.6rem;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background-color 0.2s;
+    margin-bottom: 0.5rem;
+    width: 100%;
+}
+
+.cancel-rectangle-button:hover:not(:disabled) {
+    background-color: #5a6268;
+}
+
+.cancel-rectangle-button:disabled {
+    background-color: #e9ecef;
+    color: #6c757d;
+    cursor: not-allowed;
+}
+
+.full-segmentation-button,
+.manual-noise-removal-button,
+.cancel-rectangle-button {
+    padding: 0.4rem 0.5rem;
+    font-size: 0.75rem;
+    margin-bottom: 0.4rem;
+}
+
+.correction-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.image-wrapper {
+    position: relative;
+    border: 1px solid #e9ecef;
+    border-radius: 3px;
+    overflow: hidden;
+    flex: 1;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #f8f9fa;
+}
+
+.correction-image {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+}
+
+.corner-point {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #8b5cf6;
+    border: 2px solid white;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    z-index: 5;
+    animation: cornerPointAppear 0.3s ease-out;
+}
+
+@keyframes cornerPointAppear {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+    70% {
+        transform: scale(1.1);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.image-wrapper {
+    position: relative;
+}
+
+.apply-algorithm-button {
+    background-color: #17a2b8;
+    color: white;
+    margin-top: 0.5rem;
+}
+
+.apply-algorithm-button:hover {
+    background-color: #138496;
+}
+
+.image-container {
+    position: relative;
+}
+
+.zoom-controls {
+    position: static;
+    display: flex;
+    gap: 4px;
+}
+
+.zoom-controls button {
+    width: 22px;
+    height: 22px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 3px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.zoom-controls button:hover {
+    background: #f8f9fa;
+    border-color: #3498db;
+}
+
+.zoom-indicator {
+    margin-left: 8px;
+    font-size: 0.75rem;
+    color: #666;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 1px 6px;
+    border-radius: 10px;
+    border: 1px solid #ddd;
+}
+
+.reset-zoom-button {
+    margin-left: 5px;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    background: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.reset-zoom-button:hover {
+    background: #5a6268;
+}
+
+.image-wrapper {
+    position: relative;
+    overflow: hidden !important;
+}
+
+.image-wrapper.zoomed {
+    cursor: grab;
+}
+
+.image-wrapper.zoomed:active {
+    cursor: grabbing;
+}
+
+.zoom-overlay {
+    /* L'overlay capture les événements de souris pendant le zoom */
+}
+
+@media (max-width: 768px) {
+    .zoom-controls {
+        top: 5px;
+        right: 5px;
+    }
+
+    .zoom-controls button {
+        width: 25px;
+        height: 25px;
+        font-size: 12px;
+    }
+
+    .zoom-indicator {
+        font-size: 0.7rem;
+        padding: 1px 6px;
+    }
+}
+
+.image-wrapper.zoomed {
+    box-shadow: inset 0 0 0 2px #3498db;
+}
+
+
+.zoom-controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    gap: 5px;
+    z-index: 20;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 5px;
+    border-radius: 4px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.zoom-controls button {
+    width: 30px;
+    height: 30px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 3px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.zoom-controls button:hover:not(:disabled) {
+    background: #f8f9fa;
+    border-color: #3498db;
+}
+
+.zoom-controls button:disabled {
+    background: #e9ecef;
+    color: #6c757d;
+    cursor: not-allowed;
+}
+
+.zoom-indicator {
+    margin-left: 10px;
+    font-size: 0.8rem;
+    color: #666;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 2px 8px;
+    border-radius: 12px;
+    border: 1px solid #ddd;
+}
+
+.reset-zoom-button {
+    margin-left: 5px;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    background: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.reset-zoom-button:hover {
+    background: #5a6268;
+}
+
+
+.image-wrapper {
+    position: relative;
+    overflow: hidden !important;
+}
+
+.zoom-container {
+    transition: transform 0.2s ease;
+    will-change: transform;
+}
+
+
+.image-wrapper.zoomed {
+    cursor: grab;
+}
+
+.image-wrapper.zoomed:active {
+    cursor: grabbing;
+}
+
+@media (max-width: 768px) {
+    .zoom-controls {
+        top: 5px;
+        right: 5px;
+    }
+
+    .zoom-controls button {
+        width: 25px;
+        height: 25px;
+        font-size: 12px;
+    }
+
+    .zoom-indicator {
+        font-size: 0.7rem;
+        padding: 1px 6px;
+    }
+}
+
+.image-wrapper.zoomed {
+    box-shadow: inset 0 0 0 2px #3498db;
+}
+
+.zoom-controls button {
+    width: 30px;
+    height: 30px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 3px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    color: #333;
+}
+
+.zoom-controls button:hover:not(:disabled) {
+    background: #f8f9fa;
+    border-color: #3498db;
+    color: #3498db;
+}
+
+.image-container h3.image-header .zoom-controls {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    gap: 4px !important;
+}
+
+.image-container h3.image-header .zoom-controls button {
+    width: 22px !important;
+    height: 22px !important;
+    font-size: 12px !important;
+}
+
+.image-container h3.image-header .zoom-indicator {
+    margin-left: 8px;
+    font-size: 0.75rem;
+    padding: 1px 6px;
+    border-radius: 10px;
 }

@@ -234,13 +234,67 @@ public class FileController {
 
     @PostMapping("/group/{groupId}/selected")
     public ResponseEntity<String> sendSelected(@PathVariable("groupId") String groupId,
-                                                   @PathVariable("fileId") int fileId,
-                                                   @RequestParam("x") int x,
-                                                   @RequestParam("y") int y) throws IOException {
+                                               @PathVariable("fileId") int fileId,
+                                               @RequestParam("x") int x,
+                                               @RequestParam("y") int y) throws IOException {
         if (fileService.setPoint(groupId, fileId, x, y, true)) {
             return ResponseEntity.ok("{\"status\": \"success\", \"url\": \"url here\"}");
         }
         return ResponseEntity.badRequest().body("Error applying positive point");
     }
 
+    @PostMapping("/group/{groupId}/{fileId}/remove_rectangle")
+    public ResponseEntity<byte[]> removeRectangle(@PathVariable("groupId") String groupId,
+                                                  @PathVariable("fileId") int fileId,
+                                                  @RequestParam("x") int x,
+                                                  @RequestParam("y") int y,
+                                                  @RequestParam("width") int width,
+                                                  @RequestParam("height") int height,
+                                                  @RequestParam("startType") String startType) throws IOException {
+        try {
+            if (fileService.removeRectangle(groupId, fileId, x, y, width, height, startType)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/clear_rectangles")
+    public ResponseEntity<String> clearRectangles(@PathVariable("groupId") String groupId,
+                                                  @PathVariable("fileId") int fileId) {
+        try {
+            if (fileService.clearRectangles(groupId, fileId)) {
+                return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"rectangles cleared\"}");
+            }
+            return ResponseEntity.badRequest().body("Error clearing rectangles");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error clearing rectangles: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/apply_union")
+    public ResponseEntity<byte[]> applyUnion(@PathVariable("groupId") String groupId,
+                                           @PathVariable("fileId") int fileId,
+                                           @RequestBody byte[] previousMask) throws IOException {
+        try {
+            if (fileService.applyUnion(groupId, fileId, previousMask)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
 }

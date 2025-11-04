@@ -484,6 +484,170 @@ public class FileService {
         }
     }
 
+    public boolean removeRectangle(String groupId, int fileIndex, int x, int y, int width, int height, String startType) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        System.out.println("Remove rectangle - Coords: (" + x + ", " + y + "), Size: " + width + "x" + height + ", StartType: " + startType);
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+        body.add("x", String.valueOf(x));
+        body.add("y", String.valueOf(y));
+        body.add("width", String.valueOf(width));
+        body.add("height", String.valueOf(height));
+        body.add("start_type", startType);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        String url = "http://localhost:8000/remove_rectangle";
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String processedFileName = "rectangle_removed_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Erreur lors de l'appel à l'API Python pour remove_rectangle: " + e.getMessage());
+        }
+        return false;
+    }
+
+    public boolean clearRectangles(String groupId, int fileIndex) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) {
+            System.out.println("Group not found: " + groupId);
+            return false;
+        }
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) {
+            System.out.println("Original file path not found for group: " + groupId + ", file: " + fileIndex);
+            return false;
+        }
+
+        System.out.println("Clearing rectangles for group: " + groupId + ", file: " + fileIndex);
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        try {
+            FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add("file", fileResource);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+            HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    "http://localhost:8000/clear_rectangles",
+                    HttpMethod.POST,
+                    requestEntity,
+                    String.class
+            );
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                System.out.println("Rectangles cleared successfully for group: " + groupId + ", file: " + fileIndex);
+
+                // Optionnel : sauvegarder l'état après nettoyage des rectangles
+                String processedFileName = "cleared_rectangles_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+
+                // Récupérer l'image actuelle après nettoyage
+                byte[] currentImageData = getProcessedImage(groupId, fileIndex);
+                if (currentImageData != null) {
+                    Files.write(processedFile, currentImageData, StandardOpenOption.CREATE);
+                    group.addProcessedFile(fileIndex, processedFile.toString());
+                }
+
+                return true;
+            } else {
+                System.out.println("Failed to clear rectangles, HTTP status: " + response.getStatusCode());
+                return false;
+            }
+        } catch (Exception e) {
+            System.err.println("Error calling Python API to clear rectangles: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean applyUnion(String groupId, int fileIndex, byte[] previousMask) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        System.out.println("Applying union algorithm between masks");
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        // Create the file resource for the original image
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        
+        // Create a temporary file for the previous mask
+        Path tempPreviousMask = Files.createTempFile("previous_mask_", ".png");
+        Files.write(tempPreviousMask, previousMask);
+        FileSystemResource previousMaskResource = new FileSystemResource(tempPreviousMask.toFile());
+
+        // Set up the multipart request
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+        body.add("previous_mask", previousMaskResource);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    "http://localhost:8000/apply_union",
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            // Clean up the temporary file
+            Files.deleteIfExists(tempPreviousMask);
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Error calling Python API for union: " + e.getMessage());
+            // Clean up the temporary file in case of error
+            Files.deleteIfExists(tempPreviousMask);
+        }
+        return false;
+    }
+
     private static class FileGroup {
         @Getter String groupName;
         private final Map<Integer, String> originalFiles = new HashMap<>();
