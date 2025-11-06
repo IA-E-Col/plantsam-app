@@ -259,48 +259,48 @@
 .correction-controls h3,
 .correction-methods h3,
 .correction-start h3 {
-    margin: 0 0 0.6rem 0;
+    margin: 0 0 0.6rem 0; /* Réduit de 0.8rem */
     color: #495057;
-    font-size: 0.9rem;
+    font-size: 0.9rem; /* Réduit de 1rem */
     border-bottom: 1px solid #e9ecef;
-    padding-bottom: 0.3rem;
+    padding-bottom: 0.3rem; /* Réduit de 0.4rem */
 }
 
 
 .point-selector {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    margin-bottom: 0.6rem;
+    gap: 0.4rem; /* Réduit de 0.5rem */
+    margin-bottom: 0.6rem; /* Réduit de 0.8rem */
 }
 
 .point-selector label {
     display: flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.3rem; /* Réduit de 0.4rem */
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: 0.8rem; /* Réduit de 0.85rem */
     color: #495057;
 }
 
 .point-selector input[type="radio"] {
     margin: 0;
-    transform: scale(0.85);
+    transform: scale(0.85); /* Légèrement réduit */
 }
 
 .action-buttons {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.4rem; /* Réduit de 0.5rem */
     margin-bottom: 0;
 }
 
 .control-button {
-    padding: 0.4rem 0.5rem;
+    padding: 0.4rem 0.5rem; /* Réduit de 0.5rem 0.6rem */
     border: none;
     border-radius: 3px;
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: 0.75rem; /* Réduit de 0.8rem */
     font-weight: 500;
     transition: all 0.2s ease;
     text-align: center;
@@ -713,7 +713,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    background-color: #f8f9fa;
+    background-color: #f8f9fa; /* Fond uni pour les zones vides */
 }
 
 .correction-image {
@@ -766,6 +766,7 @@
     background-color: #138496;
 }
 
+/* Styles pour le zoom à l'intérieur du cadre */
 .image-container {
     position: relative;
 }
@@ -821,11 +822,14 @@
     background: #5a6268;
 }
 
+/* Le cadre garde sa taille fixe */
 .image-wrapper {
     position: relative;
     overflow: hidden !important;
+    /* Les dimensions sont gérées par le parent .image-container */
 }
 
+/* Curseurs pour le zoom */
 .image-wrapper.zoomed {
     cursor: grab;
 }
@@ -838,6 +842,7 @@
     /* L'overlay capture les événements de souris pendant le zoom */
 }
 
+/* Ajustement responsive */
 @media (max-width: 768px) {
     .zoom-controls {
         top: 5px;
@@ -856,11 +861,13 @@
     }
 }
 
+/* Style visuel pour indiquer le mode zoom */
 .image-wrapper.zoomed {
     box-shadow: inset 0 0 0 2px #3498db;
 }
 
 
+/* Styles pour le zoom */
 .zoom-controls {
     position: absolute;
     top: 10px;
@@ -925,10 +932,11 @@
     background: #5a6268;
 }
 
-
+/* Le cadre garde sa taille fixe */
 .image-wrapper {
     position: relative;
     overflow: hidden !important;
+    /* Les dimensions sont gérées par le parent .image-container */
 }
 
 .zoom-container {
@@ -936,7 +944,7 @@
     will-change: transform;
 }
 
-
+/* Curseurs pour le zoom */
 .image-wrapper.zoomed {
     cursor: grab;
 }
@@ -945,6 +953,7 @@
     cursor: grabbing;
 }
 
+/* Ajustement responsive */
 @media (max-width: 768px) {
     .zoom-controls {
         top: 5px;
@@ -963,6 +972,7 @@
     }
 }
 
+/* Style visuel pour indiquer le mode zoom */
 .image-wrapper.zoomed {
     box-shadow: inset 0 0 0 2px #3498db;
 }
@@ -975,12 +985,12 @@
     border-radius: 3px;
     cursor: pointer;
     font-weight: bold;
-    font-size: 18px;
+    font-size: 18px; /* Augmenté la taille de la police */
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
-    color: #333;
+    color: #333; /* Ajouté pour assurer la visibilité */
 }
 
 .zoom-controls button:hover:not(:disabled) {
@@ -989,6 +999,7 @@
     color: #3498db;
 }
 
+/* Ensure header-placed zoom controls are small and not overlapping the image, overriding generic rules */
 .image-container h3.image-header .zoom-controls {
     position: static !important;
     background: transparent !important;

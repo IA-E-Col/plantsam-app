@@ -88,11 +88,17 @@ async def process_endpoint(file: UploadFile = File(...)):
         buf.seek(0)
         return StreamingResponse(buf, media_type="image/png")
 
-def segment_with_multiple_points(image_bytes: bytes, positive_points: List[Tuple[int, int]], negative_points: List[Tuple[int, int]], start_type: str = "scratch"):
+def segment_with_points(image_bytes: bytes, positive_points: List[Tuple[int, int]], negative_points: List[Tuple[int, int]], start_type: str = "scratch"):
+    print("\n=== SEGMENT WITH POINTS DEBUG ===")
     image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
 
     predictor.set_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+
+    print(f"Points info:")
+    print(f"- Positive points: {positive_points}")
+    print(f"- Negative points: {negative_points}")
+    print(f"- Start type: {start_type}")
 
     all_point_coords = []
     all_point_labels = []
@@ -156,25 +162,42 @@ async def segment_with_points(
         pos_points = []
         neg_points = []
 
-    print(f"Points positifs: {pos_points}")
-    print(f"Points négatifs: {neg_points}")
-    print(f"Start type: {start_type}")
-
     image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
     image_key = file.filename
 
-    # Toujours préférer le masque final s'il existe (base la plus à jour)
-    current_mask = None
-    if image_key in final_masks_storage:
-        current_mask = final_masks_storage[image_key]
-        print("✅ Utilisation du masque final comme base pour les points")
-    elif start_type == "segmented" and image_key in initial_masks_storage:
-        current_mask = initial_masks_storage[image_key]
-        print("Utilisation du masque initial comme base pour les points")
+    print("\n=== SEGMENT WITH POINTS DEBUG ===")
+    print(f"Positive points: {pos_points}")
+    print(f"Negative points: {neg_points}")
+    print(f"Start type: {start_type}")
+    
+    # Set up initial state
+    print("\nChecking mask storage state:")
+    print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
+    print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
+    print(f"- union_masks_storage has key: {image_key in union_masks_storage}")
+    print(f"- initial_masks_storage has key: {image_key in initial_masks_storage}")
 
     predictor.set_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
 
+    # Get the base mask to use - prioritize base_masks_storage since it contains union results
+    if image_key in base_masks_storage:
+        print("✅ Using base mask from storage (contains union result)")
+        base_mask = base_masks_storage[image_key].copy()
+        print(f"Base mask values: {np.unique(base_mask)}")
+    elif image_key in final_masks_storage:
+        print("✅ Using final mask as base")
+        base_mask = final_masks_storage[image_key].copy()
+        print(f"Base mask values: {np.unique(base_mask)}")
+    elif image_key in initial_masks_storage and start_type == "segmented":
+        print("✅ Using initial mask as base")
+        base_mask = initial_masks_storage[image_key].copy()
+        print(f"Base mask values: {np.unique(base_mask)}")
+    else:
+        print("✅ Starting with empty mask")
+        base_mask = np.zeros((image_bgr.shape[0], image_bgr.shape[1]), dtype=np.uint8)
+
+    print(f"Base mask values: {np.unique(base_mask)}")
     all_point_coords = []
     all_point_labels = []
 
@@ -189,15 +212,28 @@ async def segment_with_points(
     if not all_point_coords and not neg_points:
         if start_type == "scratch":
             segmented = np.zeros_like(image_bgr)
+            final_masks_storage[image_key] = np.zeros_like(base_mask)
         else:
-            if current_mask is not None:
-                mask_rgb = np.stack((current_mask,) * 3, axis=-1)
-                segmented = np.where(mask_rgb != 0, image_bgr, 0)
-            else:
-                segmented = image_bgr
+            # Check if we have a base mask from a previous union operation
+            if image_key in base_masks_storage:
+                base_mask = base_masks_storage[image_key]
+                print("✅ Using union result as base mask")
+            
+            mask_rgb = np.stack((base_mask,) * 3, axis=-1)
+            segmented = np.where(mask_rgb != 0, image_bgr, 0)
+            final_masks_storage[image_key] = base_mask.copy()
     else:
         point_coords = np.array(all_point_coords)
         point_labels = np.array(all_point_labels)
+        
+        # Check if we have a base mask from union operation
+        if image_key in base_masks_storage:
+            base_mask = base_masks_storage[image_key]
+            print(f"✅ Using union result as base mask (values: {np.unique(base_mask)})")
+
+        print(f"Predicting with points: {point_coords.tolist()}")
+        if current_mask is not None:
+            print(f"Using existing mask with values: {np.unique(current_mask)}")
 
         with torch.no_grad():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -209,21 +245,23 @@ async def segment_with_points(
                 )
                 new_mask = masks[np.argmax(scores)].astype(np.uint8)
 
-        # Combine with current mask considering rectangle-removed areas
-        if current_mask is not None:
-            if len(pos_points) > 0:
-                # For positive points, combine with current mask but preserve zeros (rectangle-removed areas)
-                # This means new segments cannot appear in rectangle-removed areas
-                combined_mask = np.logical_or(current_mask, new_mask).astype(np.uint8)
-                final_mask = np.where(current_mask == 0, 0, combined_mask).astype(np.uint8)
-            else:
-                # For negative points, simply remove the area from current mask
-                final_mask = np.logical_and(current_mask, np.logical_not(new_mask)).astype(np.uint8)
-        else:
-            final_mask = new_mask
+                print(f"Base mask before combining - unique values: {np.unique(base_mask)}")
+                print(f"New mask from prediction - unique values: {np.unique(new_mask)}")
 
-        # Store the result for future operations
-        final_masks_storage[image_key] = final_mask
+                if len(pos_points) > 0:
+                    # For positive points, add new regions to the base mask
+                    final_mask = np.logical_or(base_mask > 0, new_mask > 0).astype(np.uint8)
+                    print("✅ Added new positive regions to base mask")
+                else:
+                    # For negative points, remove regions from the base mask
+                    final_mask = np.logical_and(base_mask > 0, new_mask == 0).astype(np.uint8)
+                    print("✅ Removed negative regions from base mask")
+
+                print(f"Final combined mask - unique values: {np.unique(final_mask)}")
+
+                # Update both storages with the new combined mask
+                final_masks_storage[image_key] = final_mask.copy()
+                base_masks_storage[image_key] = final_mask.copy()  # Important: keep base mask updated for future operations
 
         mask_rgb = np.stack((final_mask,) * 3, axis=-1)
         segmented = np.where(mask_rgb != 0, image_bgr, 0)
@@ -238,20 +276,48 @@ async def segment_with_points(
 
 @app.post("/clear_points")
 async def clear_points(file: UploadFile = File(...)):
+    print("\n=== CLEAR POINTS ===")
     image_bytes = await file.read()
     image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
     image_key = file.filename
 
-    if image_key in union_masks_storage:
-        del union_masks_storage[image_key]
+    print(f"Storage state before clearing:")
+    print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
+    print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
+    print(f"- union_masks_storage has key: {image_key in union_masks_storage}")
+
+    # Store the existing union result if it exists
+    existing_union = None
+    if image_key in base_masks_storage:
+        print("✅ Preserving existing union result")
+        existing_union = base_masks_storage[image_key].copy()
+
+    # Clear temporary storages
     if image_key in intersection_masks_storage:
         del intersection_masks_storage[image_key]
-    if image_key in base_masks_storage:
-        del base_masks_storage[image_key]
 
-    image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
-    segmented = np.zeros_like(image_bgr)
+    # Restore the appropriate base mask
+    if existing_union is not None:
+        print("✅ Restoring previous union result as base")
+        final_masks_storage[image_key] = existing_union.copy()
+        base_masks_storage[image_key] = existing_union.copy()
+        print(f"Restored mask values: {np.unique(existing_union)}")
+        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+        mask_rgb = np.stack((existing_union,) * 3, axis=-1)
+        segmented = np.where(mask_rgb != 0, image_bgr, 0)
+    elif image_key in initial_masks_storage:
+        print("✅ Restoring initial mask as base")
+        final_masks_storage[image_key] = initial_masks_storage[image_key].copy()
+        base_masks_storage[image_key] = initial_masks_storage[image_key].copy()
+        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+        mask_rgb = np.stack((initial_masks_storage[image_key],) * 3, axis=-1)
+        segmented = np.where(mask_rgb != 0, image_bgr, 0)
+    else:
+        print("✅ Resetting to empty mask")
+        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+        segmented = np.zeros_like(image_bgr)
+
+    print("✅ Points cleared successfully")
     segmented_rgb = cv2.cvtColor(segmented, cv2.COLOR_BGR2RGB)
     segmented_pil = Image.fromarray(segmented_rgb)
     buf = io.BytesIO()
@@ -275,13 +341,22 @@ async def segment_union(
 
         image_key = file.filename
 
-        print(f"Segment union - Point: ({x}, {y}), Count: {point_count}, Start type: {start_type}")
+        print(f"\n=== SEGMENT UNION DEBUG ===")
+        print(f"Point: ({x}, {y}), Count: {point_count}, Start type: {start_type}")
+        print(f"Storage state:")
+        print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
+        print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
+        print(f"- union_masks_storage has key: {image_key in union_masks_storage}")
+        if image_key in final_masks_storage:
+            print(f"- final_mask values: {np.unique(final_masks_storage[image_key])}")
+        if image_key in base_masks_storage:
+            print(f"- base_mask values: {np.unique(base_masks_storage[image_key])}")
 
         # Toujours préférer le masque final comme base s'il existe
         if point_count == 1 and image_key in final_masks_storage:
             base_mask = final_masks_storage[image_key]
             union_masks_storage[image_key] = base_mask.copy()
-            print("✅ Utilisation du masque final comme base pour l'union")
+            print("✅ Using final mask as base for union operation")
         elif point_count == 1 and start_type == "segmented" and image_key in initial_masks_storage:
             initial_mask = initial_masks_storage[image_key]
             union_masks_storage[image_key] = initial_mask.copy()
@@ -579,13 +654,24 @@ async def clear_rectangles(file: UploadFile = File(...)):
 @app.post("/apply_union")
 async def apply_union(file: UploadFile = File(...), previous_mask: UploadFile = File(...)):
     try:
+        print("\n=== APPLY UNION DEBUG ===")
+        
         # Read the current image
         image_bytes = await file.read()
         image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
         image_key = file.filename
+        
+        print(f"Initial storage state:")
+        print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
+        print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
+        print(f"- union_masks_storage has key: {image_key in union_masks_storage}")
+        if image_key in final_masks_storage:
+            print(f"- final_mask values: {np.unique(final_masks_storage[image_key])}")
+        if image_key in base_masks_storage:
+            print(f"- base_mask values: {np.unique(base_masks_storage[image_key])}")
 
-        # Read and process the previous mask
+        # Read and process the previous mask to binary (0 or 1)
         prev_mask_bytes = await previous_mask.read()
         prev_mask_pil = Image.open(io.BytesIO(prev_mask_bytes)).convert("RGB")
         prev_mask_bgr = cv2.cvtColor(np.array(prev_mask_pil), cv2.COLOR_BGR2GRAY)
@@ -593,13 +679,35 @@ async def apply_union(file: UploadFile = File(...), previous_mask: UploadFile = 
 
         # Get the current final mask
         if image_key not in final_masks_storage:
-            return {"status": "error", "message": "No final mask found for the image"}
+            current_mask = np.zeros_like(prev_mask_binary)
+        else:
+            current_mask = final_masks_storage[image_key].copy()
 
-        current_mask = final_masks_storage[image_key]
+        # Make sure both masks are strictly binary (0 or 1)
+        current_mask = (current_mask > 0).astype(np.uint8)
+        prev_mask_binary = (prev_mask_binary > 0).astype(np.uint8)
 
         # Apply union operation
         union_result = np.logical_or(current_mask, prev_mask_binary).astype(np.uint8)
-        final_masks_storage[image_key] = union_result
+        print(f"\nUnion operation complete - values in result: {np.unique(union_result)}")
+        
+        # Store the result in all storages to maintain consistent state
+        final_masks_storage[image_key] = union_result.copy()
+        base_masks_storage[image_key] = union_result.copy()  # This is crucial - it becomes the base for future operations
+        union_masks_storage[image_key] = union_result.copy()
+
+        # Clear any temporary state to ensure clean operations
+        if image_key in intersection_masks_storage:
+            del intersection_masks_storage[image_key]
+
+        print("\nMask storage state updated:")
+        print(f"- final_masks_storage contains mask with values: {np.unique(final_masks_storage[image_key])}")
+        print(f"- base_masks_storage contains mask with values: {np.unique(base_masks_storage[image_key])}")
+        print(f"- union_masks_storage contains mask with values: {np.unique(union_masks_storage[image_key])}")
+        print("✅ Union result stored and ready for future operations")
+
+        print(f"Union result unique values: {np.unique(union_result)}")
+        print("✅ Union operation completed and stored in final_masks_storage")
 
         # Create visualization
         mask_rgb = np.stack((union_result,) * 3, axis=-1)

@@ -474,15 +474,27 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                     return;
                 }
 
-                // Pour l'union, on utilise l'endpoint segment_union qui accumule les masques
-                const lastPositivePoint = positivePoints[positivePoints.length - 1];
-                const scaledPoint = {
-                    x: Math.round(lastPositivePoint.relX * naturalWidth),
-                    y: Math.round(lastPositivePoint.relY * naturalHeight)
-                };
+                // Reset the server state first
+                await fetch(
+                    `/api/files/group/${groupId}/${currentImageIndex}/clear_points`,
+                    { method: 'POST' }
+                );
 
-                const unionUrl = `/api/files/group/${groupId}/${currentImageIndex}/segment_union?x=${scaledPoint.x}&y=${scaledPoint.y}&pointCount=${positivePoints.length}&startType=${startType}`;
-                response = await fetch(unionUrl, { method: 'POST' });
+                // Apply points one by one to rebuild the state
+                let lastResponse = null;
+                for (let i = 0; i < positivePoints.length; i++) {
+                    const point = positivePoints[i];
+                    const scaledPoint = {
+                        x: Math.round(point.relX * naturalWidth),
+                        y: Math.round(point.relY * naturalHeight)
+                    };
+
+                    lastResponse = await fetch(
+                        `/api/files/group/${groupId}/${currentImageIndex}/segment_union?x=${scaledPoint.x}&y=${scaledPoint.y}&pointCount=${i + 1}&startType=${startType}`,
+                        { method: 'POST' }
+                    );
+                }
+                response = lastResponse;
                 stepName = `step_union_${positivePoints.length}_${Date.now()}`;
 
             } else if (algoType === 'intersection') {
@@ -666,6 +678,23 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         } else {
             // Réappliquer tous les points restants avec les rectangles
             await applyAllCorrections(newPoints, rectangles);
+            
+            // Mettre à jour l'image finale après l'undo
+            if (groupId) {
+                try {
+                    const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`);
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        if (processedImageUrl) {
+                            URL.revokeObjectURL(processedImageUrl);
+                        }
+                        const newUrl = URL.createObjectURL(blob);
+                        setProcessedImageUrl(newUrl);
+                    }
+                } catch (error) {
+                    console.error('Error updating final mask after undo:', error);
+                }
+            }
         }
     };
 
@@ -1219,6 +1248,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 URL.revokeObjectURL(processedImageUrl);
             }
             const url = URL.createObjectURL(blob);
+            
+            // Reset points since we have a new base mask from the union
+            setPoints([]);
             setProcessedImageUrl(url);
 
             // Add this as a step in the segmentation history
