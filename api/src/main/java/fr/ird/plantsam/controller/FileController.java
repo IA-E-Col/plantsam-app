@@ -297,4 +297,42 @@ public class FileController {
             return ResponseEntity.badRequest().body(null);
         }
     }
+
+    @PostMapping("/group/{groupId}/{fileId}/apply_intersection")
+    public ResponseEntity<byte[]> applyIntersection(@PathVariable("groupId") String groupId,
+                                           @PathVariable("fileId") int fileId,
+                                           @RequestBody byte[] previousMask) throws IOException {
+        try {
+            if (fileService.applyIntersection(groupId, fileId, previousMask)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
+
+    @PostMapping("/group/{groupId}/{fileId}/apply_iou")
+    public ResponseEntity<byte[]> applyIou(@PathVariable("groupId") String groupId,
+                                           @PathVariable("fileId") int fileId,
+                                           @RequestBody byte[] previousMask) throws IOException {
+        try {
+            if (fileService.applyIou(groupId, fileId, previousMask)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
 }

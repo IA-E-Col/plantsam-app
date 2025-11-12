@@ -648,6 +648,118 @@ public class FileService {
         return false;
     }
 
+    public boolean applyIntersection(String groupId, int fileIndex, byte[] previousMask) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        System.out.println("Applying intersection algorithm between masks");
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        // Create the file resource for the original image
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        
+        // Create a temporary file for the previous mask
+        Path tempPreviousMask = Files.createTempFile("previous_mask_", ".png");
+        Files.write(tempPreviousMask, previousMask);
+        FileSystemResource previousMaskResource = new FileSystemResource(tempPreviousMask.toFile());
+
+        // Set up the multipart request
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+        body.add("previous_mask", previousMaskResource);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    "http://localhost:8000/apply_intersection",
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            // Clean up the temporary file
+            Files.deleteIfExists(tempPreviousMask);
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Error calling Python API for intersection: " + e.getMessage());
+            // Clean up the temporary file in case of error
+            Files.deleteIfExists(tempPreviousMask);
+        }
+        return false;
+    }
+
+    public boolean applyIou(String groupId, int fileIndex, byte[] previousMask) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        System.out.println("Applying IoU algorithm between masks");
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        // Create the file resource for the original image
+        FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
+        
+        // Create a temporary file for the previous mask
+        Path tempPreviousMask = Files.createTempFile("previous_mask_", ".png");
+        Files.write(tempPreviousMask, previousMask);
+        FileSystemResource previousMaskResource = new FileSystemResource(tempPreviousMask.toFile());
+
+        // Set up the multipart request
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+        body.add("previous_mask", previousMaskResource);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        try {
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    "http://localhost:8000/apply_iou",
+                    HttpMethod.POST,
+                    requestEntity,
+                    byte[].class
+            );
+
+            // Clean up the temporary file
+            Files.deleteIfExists(tempPreviousMask);
+
+            if (response.getStatusCode() == HttpStatus.OK) {
+                String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
+                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
+                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
+
+                group.addProcessedFile(fileIndex, processedFile.toString());
+                return true;
+            }
+        } catch (Exception e) {
+            System.err.println("Error calling Python API for IoU: " + e.getMessage());
+            // Clean up the temporary file in case of error
+            Files.deleteIfExists(tempPreviousMask);
+        }
+        return false;
+    }
+
     private static class FileGroup {
         @Getter String groupName;
         private final Map<Integer, String> originalFiles = new HashMap<>();

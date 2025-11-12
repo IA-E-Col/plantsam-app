@@ -1084,7 +1084,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                     break;
                 }
 
-                // Mettre à jour l'image après chaque rectangle
                 const blob = await response.blob();
                 if (processedImageUrl) {
                     URL.revokeObjectURL(processedImageUrl);
@@ -1095,7 +1094,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
 
-            // APRÈS avoir appliqué les rectangles, réappliquer les points s'il y en a
             if (points.length > 0) {
                 console.log('Réapplication des points après les rectangles');
                 await applySegmentationWithPoints(points);
@@ -1120,7 +1118,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 rectangles: rectanglesList.length
             });
 
-            // 1. Réinitialiser l'état serveur
             const resetResponse = await fetch(
                 `/api/files/group/${groupId}/${currentImageIndex}/clear_rectangles`,
                 { method: 'POST' }
@@ -1130,7 +1127,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 console.warn('Impossible de réinitialiser les rectangles');
             }
 
-            // 2. Appliquer les rectangles d'abord
             if (rectanglesList.length > 0) {
                 let lastResponse = null;
                 for (const rect of rectanglesList) {
@@ -1158,7 +1154,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                     }
                 }
 
-                // Only update the UI once after all rectangles are applied
                 if (lastResponse && lastResponse.ok) {
                     const blob = await lastResponse.blob();
                     if (processedImageUrl) {
@@ -1169,7 +1164,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 }
             }
 
-            // 3. Appliquer les points ensuite
             if (pointsList.length > 0) {
                 await applySegmentationWithPoints(pointsList);
             }
@@ -1206,7 +1200,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         try {
             console.log('Applying algorithm:', algoType);
 
-            // Instead of fetching the blob URL, we'll use the most recent mask from segmentationSteps
             let previousMaskBlob: Blob;
             
             if (selectedStepId) {
@@ -1225,16 +1218,25 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 throw new Error("No previous mask available");
             }
 
-            // Create form data and add the previous mask
             const formData = new FormData();
             formData.append('previousMask', previousMaskBlob);
 
-            // Send request to apply the algorithm
+            let endpoint: string;
+            if (algoType === 'union') {
+                endpoint = 'apply_union';
+            } else if (algoType === 'intersection') {
+                endpoint = 'apply_intersection';
+            } else if (algoType === 'iou') {
+                endpoint = 'apply_iou';
+            } else {
+                throw new Error(`Unknown algorithm type: ${algoType}`);
+            }
+
             const response = await fetch(
-                `/api/files/group/${groupId}/${currentImageIndex}/apply_union`,
+                `/api/files/group/${groupId}/${currentImageIndex}/${endpoint}`,
                 {
                     method: 'POST',
-                    body: previousMaskBlob // Send the blob directly as the body
+                    body: previousMaskBlob
                 }
             );
 
@@ -1249,12 +1251,23 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             }
             const url = URL.createObjectURL(blob);
             
-            // Reset points since we have a new base mask from the union
             setPoints([]);
             setProcessedImageUrl(url);
 
-            // Add this as a step in the segmentation history
-            await saveStepImage(blob, `${algoType}_operation`);
+            // Save the step and add it to segmentation steps
+            const stepName = `${algoType}_operation`;
+            await saveStepImage(blob, stepName);
+            const stepUrl = URL.createObjectURL(blob);
+            const newStep: SegmentationStep = {
+                id: stepIdCounter.current++,
+                imageUrl: stepUrl,
+                stepName: stepName,
+                timestamp: new Date()
+            };
+            setSegmentationSteps(prev => [...prev, newStep]);
+
+            // Reset algorithm type to 'union' so subsequent point placements work correctly
+            setAlgoType('union');
 
             console.log(`${algoType} operation applied successfully`);
         } catch (error) {

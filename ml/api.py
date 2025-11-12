@@ -30,6 +30,7 @@ model_yolo_1024 = YOLOv10("models/trainedyolov10.pt")
 
 union_masks_storage = {}
 intersection_masks_storage = {}
+iou_masks_storage = {}
 base_masks_storage = {}
 initial_masks_storage = {}
 final_masks_storage = {}
@@ -285,25 +286,49 @@ async def clear_points(file: UploadFile = File(...)):
     print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
     print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
     print(f"- union_masks_storage has key: {image_key in union_masks_storage}")
+    print(f"- intersection_masks_storage has key: {image_key in intersection_masks_storage}")
+    print(f"- iou_masks_storage has key: {image_key in iou_masks_storage}")
 
-    # Store the existing union result if it exists
-    existing_union = None
+    # Store any existing algorithm result if it exists
+    existing_result = None
+    operation_type = None
+    
     if image_key in base_masks_storage:
-        print("✅ Preserving existing union result")
-        existing_union = base_masks_storage[image_key].copy()
+        if image_key in union_masks_storage:
+            print("✅ Preserving existing union result")
+            existing_result = base_masks_storage[image_key].copy()
+            operation_type = "union"
+        elif image_key in intersection_masks_storage:
+            print("✅ Preserving existing intersection result")
+            existing_result = base_masks_storage[image_key].copy()
+            operation_type = "intersection"
+        elif image_key in iou_masks_storage:
+            print("✅ Preserving existing IoU result")
+            existing_result = base_masks_storage[image_key].copy()
+            operation_type = "iou"
 
-    # Clear temporary storages
-    if image_key in intersection_masks_storage:
-        del intersection_masks_storage[image_key]
+    # Clear temporary storages but preserve the algorithm result
+    temp_storages = [intersection_masks_storage, union_masks_storage, iou_masks_storage]
+    storage_to_preserve = None
+    if operation_type == "intersection":
+        storage_to_preserve = intersection_masks_storage
+    elif operation_type == "union":
+        storage_to_preserve = union_masks_storage
+    elif operation_type == "iou":
+        storage_to_preserve = iou_masks_storage
+        
+    for storage in temp_storages:
+        if image_key in storage and storage is not storage_to_preserve:
+            del storage[image_key]
 
     # Restore the appropriate base mask
-    if existing_union is not None:
-        print("✅ Restoring previous union result as base")
-        final_masks_storage[image_key] = existing_union.copy()
-        base_masks_storage[image_key] = existing_union.copy()
-        print(f"Restored mask values: {np.unique(existing_union)}")
+    if existing_result is not None:
+        print(f"✅ Restoring previous {operation_type} result as base")
+        final_masks_storage[image_key] = existing_result.copy()
+        base_masks_storage[image_key] = existing_result.copy()
+        print(f"Restored mask values: {np.unique(existing_result)}")
         image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
-        mask_rgb = np.stack((existing_union,) * 3, axis=-1)
+        mask_rgb = np.stack((existing_result,) * 3, axis=-1)
         segmented = np.where(mask_rgb != 0, image_bgr, 0)
     elif image_key in initial_masks_storage:
         print("✅ Restoring initial mask as base")
@@ -699,6 +724,8 @@ async def apply_union(file: UploadFile = File(...), previous_mask: UploadFile = 
         # Clear any temporary state to ensure clean operations
         if image_key in intersection_masks_storage:
             del intersection_masks_storage[image_key]
+        if image_key in iou_masks_storage:
+            del iou_masks_storage[image_key]
 
         print("\nMask storage state updated:")
         print(f"- final_masks_storage contains mask with values: {np.unique(final_masks_storage[image_key])}")
@@ -725,6 +752,184 @@ async def apply_union(file: UploadFile = File(...), previous_mask: UploadFile = 
 
     except Exception as e:
         print(f"❌ Error in apply_union: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+@app.post("/apply_intersection")
+async def apply_intersection(file: UploadFile = File(...), previous_mask: UploadFile = File(...)):
+    try:
+        print("\n=== APPLY INTERSECTION DEBUG ===")
+        
+        # Read the current image
+        image_bytes = await file.read()
+        image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+        image_key = file.filename
+        
+        print(f"Initial storage state:")
+        print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
+        print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
+        print(f"- intersection_masks_storage has key: {image_key in intersection_masks_storage}")
+        if image_key in final_masks_storage:
+            print(f"- final_mask values: {np.unique(final_masks_storage[image_key])}")
+        if image_key in base_masks_storage:
+            print(f"- base_mask values: {np.unique(base_masks_storage[image_key])}")
+
+        # Read and process the previous mask to binary (0 or 1)
+        prev_mask_bytes = await previous_mask.read()
+        prev_mask_pil = Image.open(io.BytesIO(prev_mask_bytes)).convert("RGB")
+        prev_mask_bgr = cv2.cvtColor(np.array(prev_mask_pil), cv2.COLOR_BGR2GRAY)
+        _, prev_mask_binary = cv2.threshold(prev_mask_bgr, 1, 1, cv2.THRESH_BINARY)
+
+        # Get the current final mask
+        if image_key not in final_masks_storage:
+            current_mask = np.ones_like(prev_mask_binary)  # For intersection, start with all 1s
+        else:
+            current_mask = final_masks_storage[image_key].copy()
+
+        # Make sure both masks are strictly binary (0 or 1)
+        current_mask = (current_mask > 0).astype(np.uint8)
+        prev_mask_binary = (prev_mask_binary > 0).astype(np.uint8)
+
+        # Apply intersection operation
+        intersection_result = np.logical_and(current_mask, prev_mask_binary).astype(np.uint8)
+        print(f"\nIntersection operation complete - values in result: {np.unique(intersection_result)}")
+        
+        # Store the result in all storages to maintain consistent state
+        final_masks_storage[image_key] = intersection_result.copy()
+        base_masks_storage[image_key] = intersection_result.copy()  # This is crucial - it becomes the base for future operations
+        intersection_masks_storage[image_key] = intersection_result.copy()
+
+        # Clear any temporary union state
+        if image_key in union_masks_storage:
+            del union_masks_storage[image_key]
+        if image_key in iou_masks_storage:
+            del iou_masks_storage[image_key]
+
+        print("\nMask storage state updated:")
+        print(f"- final_masks_storage contains mask with values: {np.unique(final_masks_storage[image_key])}")
+        print(f"- base_masks_storage contains mask with values: {np.unique(base_masks_storage[image_key])}")
+        print(f"- intersection_masks_storage contains mask with values: {np.unique(intersection_masks_storage[image_key])}")
+        print("✅ Intersection result stored and ready for future operations")
+
+        # Create visualization
+        mask_rgb = np.stack((intersection_result,) * 3, axis=-1)
+        segmented = np.where(mask_rgb != 0, image_bgr, 0)
+        
+        # Convert to RGB and prepare response
+        segmented_rgb = cv2.cvtColor(segmented, cv2.COLOR_BGR2RGB)
+        segmented_pil = Image.fromarray(segmented_rgb)
+        buf = io.BytesIO()
+        segmented_pil.save(buf, format="PNG")
+        buf.seek(0)
+
+        print(f"✅ Intersection operation completed successfully")
+        return StreamingResponse(buf, media_type="image/png")
+
+    except Exception as e:
+        print(f"❌ Error in apply_intersection: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+@app.post("/apply_iou")
+async def apply_iou(file: UploadFile = File(...), previous_mask: UploadFile = File(...)):
+    try:
+        print("\n=== APPLY IOU DEBUG ===")
+        
+        # Read the current image
+        image_bytes = await file.read()
+        image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+        image_key = file.filename
+        
+        print(f"Initial storage state:")
+        print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
+        print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
+        if image_key in final_masks_storage:
+            print(f"- final_mask values: {np.unique(final_masks_storage[image_key])}")
+        if image_key in base_masks_storage:
+            print(f"- base_mask values: {np.unique(base_masks_storage[image_key])}")
+
+        # Read and process the previous mask to binary (0 or 1)
+        prev_mask_bytes = await previous_mask.read()
+        prev_mask_pil = Image.open(io.BytesIO(prev_mask_bytes)).convert("RGB")
+        prev_mask_bgr = cv2.cvtColor(np.array(prev_mask_pil), cv2.COLOR_BGR2GRAY)
+        _, prev_mask_binary = cv2.threshold(prev_mask_bgr, 1, 1, cv2.THRESH_BINARY)
+
+        # Get the current final mask
+        if image_key not in final_masks_storage:
+            print("⚠️ No current mask found, creating empty mask")
+            current_mask = np.zeros_like(prev_mask_binary)
+        else:
+            current_mask = final_masks_storage[image_key].copy()
+
+        # Make sure both masks are strictly binary (0 or 1)
+        current_mask = (current_mask > 0).astype(np.uint8)
+        prev_mask_binary = (prev_mask_binary > 0).astype(np.uint8)
+
+        print(f"Current mask non-zero pixels: {np.count_nonzero(current_mask)}")
+        print(f"Previous mask non-zero pixels: {np.count_nonzero(prev_mask_binary)}")
+
+        # Calculate intersection and union
+        intersection = np.logical_and(current_mask, prev_mask_binary).astype(np.uint8)
+        union = np.logical_or(current_mask, prev_mask_binary).astype(np.uint8)
+        
+        intersection_count = np.count_nonzero(intersection)
+        union_count = np.count_nonzero(union)
+        
+        # Calculate IoU score
+        if union_count > 0:
+            iou_score = intersection_count / union_count
+        else:
+            iou_score = 0.0
+            
+        print(f"\nIoU Calculation:")
+        print(f"- Intersection pixels: {intersection_count}")
+        print(f"- Union pixels: {union_count}")
+        print(f"- IoU Score: {iou_score:.4f}")
+
+        # For the result, we return the intersection (common area between both masks)
+        # This represents the area where both masks agree
+        iou_result = intersection.copy()
+        
+        print(f"\nIoU operation complete - values in result: {np.unique(iou_result)}")
+        print(f"Result non-zero pixels: {np.count_nonzero(iou_result)}")
+        
+        # Store the result in all storages to maintain consistent state
+        final_masks_storage[image_key] = iou_result.copy()
+        base_masks_storage[image_key] = iou_result.copy()
+        iou_masks_storage[image_key] = iou_result.copy()
+
+        # Clear any temporary state to ensure clean operations
+        if image_key in union_masks_storage:
+            del union_masks_storage[image_key]
+        if image_key in intersection_masks_storage:
+            del intersection_masks_storage[image_key]
+
+        print("\nMask storage state updated:")
+        print(f"- final_masks_storage contains mask with values: {np.unique(final_masks_storage[image_key])}")
+        print(f"- base_masks_storage contains mask with values: {np.unique(base_masks_storage[image_key])}")
+        print(f"- iou_masks_storage contains mask with values: {np.unique(iou_masks_storage[image_key])}")
+        print("✅ IoU result stored and ready for future operations")
+
+        # Create visualization
+        mask_rgb = np.stack((iou_result,) * 3, axis=-1)
+        segmented = np.where(mask_rgb != 0, image_bgr, 0)
+        
+        # Convert to RGB and prepare response
+        segmented_rgb = cv2.cvtColor(segmented, cv2.COLOR_BGR2RGB)
+        segmented_pil = Image.fromarray(segmented_rgb)
+        buf = io.BytesIO()
+        segmented_pil.save(buf, format="PNG")
+        buf.seek(0)
+
+        print(f"✅ IoU operation completed successfully with IoU score: {iou_score:.4f}")
+        return StreamingResponse(buf, media_type="image/png")
+
+    except Exception as e:
+        print(f"❌ Error in apply_iou: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
