@@ -233,8 +233,7 @@ async def segment_with_points(
             print(f"✅ Using union result as base mask (values: {np.unique(base_mask)})")
 
         print(f"Predicting with points: {point_coords.tolist()}")
-        if current_mask is not None:
-            print(f"Using existing mask with values: {np.unique(current_mask)}")
+        print(f"Using base mask with values: {np.unique(base_mask)}")
 
         with torch.no_grad():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -289,10 +288,11 @@ async def clear_points(file: UploadFile = File(...)):
     print(f"- intersection_masks_storage has key: {image_key in intersection_masks_storage}")
     print(f"- iou_masks_storage has key: {image_key in iou_masks_storage}")
 
-    # Store any existing algorithm result if it exists
+    # Store any existing algorithm result or current state if it exists
     existing_result = None
     operation_type = None
     
+    # Check if we have an algorithm-specific result
     if image_key in base_masks_storage:
         if image_key in union_masks_storage:
             print("✅ Preserving existing union result")
@@ -306,8 +306,14 @@ async def clear_points(file: UploadFile = File(...)):
             print("✅ Preserving existing IoU result")
             existing_result = base_masks_storage[image_key].copy()
             operation_type = "iou"
+        else:
+            # base_masks_storage exists but no algorithm storage
+            # This means rectangles have been applied - preserve this state!
+            print("✅ Preserving current mask state (likely from rectangle removals)")
+            existing_result = base_masks_storage[image_key].copy()
+            operation_type = "current_state"
 
-    # Clear temporary storages but preserve the algorithm result
+    # Clear temporary algorithm storages but preserve the result
     temp_storages = [intersection_masks_storage, union_masks_storage, iou_masks_storage]
     storage_to_preserve = None
     if operation_type == "intersection":
@@ -321,25 +327,24 @@ async def clear_points(file: UploadFile = File(...)):
         if image_key in storage and storage is not storage_to_preserve:
             del storage[image_key]
 
+    image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+
     # Restore the appropriate base mask
     if existing_result is not None:
-        print(f"✅ Restoring previous {operation_type} result as base")
+        print(f"✅ Restoring previous {operation_type} as base")
         final_masks_storage[image_key] = existing_result.copy()
         base_masks_storage[image_key] = existing_result.copy()
         print(f"Restored mask values: {np.unique(existing_result)}")
-        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
         mask_rgb = np.stack((existing_result,) * 3, axis=-1)
         segmented = np.where(mask_rgb != 0, image_bgr, 0)
     elif image_key in initial_masks_storage:
         print("✅ Restoring initial mask as base")
         final_masks_storage[image_key] = initial_masks_storage[image_key].copy()
         base_masks_storage[image_key] = initial_masks_storage[image_key].copy()
-        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
         mask_rgb = np.stack((initial_masks_storage[image_key],) * 3, axis=-1)
         segmented = np.where(mask_rgb != 0, image_bgr, 0)
     else:
         print("✅ Resetting to empty mask")
-        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
         segmented = np.zeros_like(image_bgr)
 
     print("✅ Points cleared successfully")
@@ -377,15 +382,39 @@ async def segment_union(
         if image_key in base_masks_storage:
             print(f"- base_mask values: {np.unique(base_masks_storage[image_key])}")
 
-        # Toujours préférer le masque final comme base s'il existe
-        if point_count == 1 and image_key in final_masks_storage:
-            base_mask = final_masks_storage[image_key]
-            union_masks_storage[image_key] = base_mask.copy()
-            print("✅ Using final mask as base for union operation")
-        elif point_count == 1 and start_type == "segmented" and image_key in initial_masks_storage:
-            initial_mask = initial_masks_storage[image_key]
-            union_masks_storage[image_key] = initial_mask.copy()
-            print("Utilisation du masque initial comme base pour l'union")
+        # Initialize or update union base from current state
+        # This is critical: we need to check if base_masks_storage has been updated
+        # (e.g., by rectangle removals) since the last union operation
+        if point_count == 1:
+            # First point - always initialize from current state
+            if image_key in final_masks_storage:
+                base_mask = final_masks_storage[image_key]
+                union_masks_storage[image_key] = base_mask.copy()
+                print("✅ Using final mask as base for union operation (first point)")
+            elif start_type == "segmented" and image_key in initial_masks_storage:
+                initial_mask = initial_masks_storage[image_key]
+                union_masks_storage[image_key] = initial_mask.copy()
+                print("✅ Using initial mask as base for union (first point)")
+            else:
+                # No existing mask, start fresh
+                pass
+        else:
+            # Subsequent points - check if base has been updated (e.g., by rectangles)
+            if image_key in base_masks_storage and image_key in union_masks_storage:
+                # Compare if base_masks_storage has been modified (e.g., by rectangle removal)
+                # If they differ, we need to update the union base
+                base_mask = base_masks_storage[image_key]
+                current_union = union_masks_storage[image_key]
+                
+                # Check if base has areas removed that union doesn't have
+                # This happens when rectangles are added after points
+                if not np.array_equal(base_mask, current_union):
+                    # Base has changed (rectangles added) - update union base to include these changes
+                    # We use logical_and to remove areas from union that were removed in base
+                    updated_union_base = np.logical_and(current_union, base_mask).astype(np.uint8)
+                    union_masks_storage[image_key] = updated_union_base
+                    print(f"✅ Updated union base to include rectangle removals from base_masks_storage")
+                    print(f"   Pixels removed: {np.count_nonzero(current_union) - np.count_nonzero(updated_union_base)}")
 
         predictor.set_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
 
@@ -420,8 +449,11 @@ async def segment_union(
 
         final_mask = union_masks_storage[image_key]
 
-        # TOUJOURS mettre à jour le masque final
-        final_masks_storage[image_key] = final_mask
+        # ALWAYS update both final_masks_storage AND base_masks_storage
+        # This ensures subsequent operations (including other points) see the accumulated union state
+        final_masks_storage[image_key] = final_mask.copy()
+        base_masks_storage[image_key] = final_mask.copy()
+        print(f"✅ Updated both final_masks_storage and base_masks_storage with union result")
 
         kernel = np.ones((3, 3), np.uint8)
         final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
@@ -474,28 +506,43 @@ async def segment_intersection(
             best_mask_index = np.argmax(scores)
             negative_mask = masks[best_mask_index].astype(np.uint8)
 
-    if point_count == 1 and image_key in final_masks_storage:
-        base_mask = final_masks_storage[image_key]
-        base_masks_storage[image_key] = base_mask
-        print("✅ Utilisation du masque final comme base pour l'intersection")
-    elif point_count == 1 and start_type == "segmented" and image_key in initial_masks_storage:
-        base_mask = initial_masks_storage[image_key]
-        base_masks_storage[image_key] = base_mask
-        print("Utilisation du masque initial comme base pour l'intersection")
-    elif point_count == 1 and image_key not in base_masks_storage:
-        height, width = image_bgr.shape[:2]
-        center_x, center_y = width // 2, height // 2
+    # Initialize or update base mask for intersection
+    if point_count == 1:
+        # First negative point - initialize base
+        if image_key in final_masks_storage:
+            base_mask = final_masks_storage[image_key]
+            base_masks_storage[image_key] = base_mask
+            print("✅ Using final mask as base for intersection (first point)")
+        elif start_type == "segmented" and image_key in initial_masks_storage:
+            base_mask = initial_masks_storage[image_key]
+            base_masks_storage[image_key] = base_mask
+            print("✅ Using initial mask as base for intersection (first point)")
+        elif image_key not in base_masks_storage:
+            height, width = image_bgr.shape[:2]
+            center_x, center_y = width // 2, height // 2
 
-        with torch.no_grad():
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                base_masks, base_scores, _ = predictor.predict(
-                    point_coords=np.array([[center_x, center_y]]),
-                    point_labels=np.array([1]),
-                    box=None,
-                    multimask_output=True
-                )
-                base_mask = base_masks[np.argmax(base_scores)].astype(np.uint8)
-        base_masks_storage[image_key] = base_mask
+            with torch.no_grad():
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    base_masks, base_scores, _ = predictor.predict(
+                        point_coords=np.array([[center_x, center_y]]),
+                        point_labels=np.array([1]),
+                        box=None,
+                        multimask_output=True
+                    )
+                    base_mask = base_masks[np.argmax(base_scores)].astype(np.uint8)
+            base_masks_storage[image_key] = base_mask
+    else:
+        # Subsequent negative points - check if base has been updated by rectangles
+        if image_key in base_masks_storage and image_key in intersection_masks_storage:
+            base_mask = base_masks_storage[image_key]
+            current_intersection = intersection_masks_storage[image_key]
+            
+            # If base has changed (rectangles added), update intersection to respect those changes
+            if not np.array_equal(base_mask, current_intersection):
+                updated_intersection = np.logical_and(current_intersection, base_mask).astype(np.uint8)
+                intersection_masks_storage[image_key] = updated_intersection
+                print(f"✅ Updated intersection base to include rectangle removals from base_masks_storage")
+                print(f"   Pixels removed: {np.count_nonzero(current_intersection) - np.count_nonzero(updated_intersection)}")
 
     if point_count == 1:
         if image_key in base_masks_storage:
@@ -548,6 +595,11 @@ async def segment_intersection(
             print(f"Masque d'intersection recréé - Point négatif appliqué")
 
     final_mask = intersection_masks_storage[image_key]
+
+    # Update both storages to ensure subsequent operations see the intersection result
+    final_masks_storage[image_key] = final_mask.copy()
+    base_masks_storage[image_key] = final_mask.copy()
+    print(f"✅ Updated both final_masks_storage and base_masks_storage with intersection result")
 
     kernel = np.ones((3, 3), np.uint8)
     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
@@ -621,8 +673,11 @@ async def remove_rectangle(
         current_mask[y1:y2, x1:x2] = 0
         print(f"✅ Forced rectangle removal from mask")
         
-        # Store rectangle removal result as final mask for future operations
+        # Store rectangle removal result in both storages for future operations
+        # This ensures point-based operations will respect rectangle removals
         final_masks_storage[image_key] = current_mask
+        base_masks_storage[image_key] = current_mask.copy()
+        print(f"✅ Updated both final_masks_storage and base_masks_storage")
 
         mask_rgb = np.stack((current_mask,) * 3, axis=-1)
         segmented = np.where(mask_rgb != 0, image_bgr, 0)
@@ -664,12 +719,22 @@ async def clear_rectangles(file: UploadFile = File(...)):
     try:
         image_key = file.filename
 
-        if image_key in final_masks_storage:
-            del final_masks_storage[image_key]
+        print(f"\n=== CLEAR RECTANGLES DEBUG ===")
+        print(f"Clearing rectangle state for: {image_key}")
 
-        # Si vous voulez revenir au masque initial
+        # Reset to initial mask if it exists, otherwise clear
         if image_key in initial_masks_storage:
-            final_masks_storage[image_key] = initial_masks_storage[image_key].copy()
+            initial_mask = initial_masks_storage[image_key].copy()
+            final_masks_storage[image_key] = initial_mask
+            base_masks_storage[image_key] = initial_mask
+            print(f"✅ Reset to initial mask")
+        else:
+            # Clear all mask storages for this image
+            if image_key in final_masks_storage:
+                del final_masks_storage[image_key]
+            if image_key in base_masks_storage:
+                del base_masks_storage[image_key]
+            print(f"✅ Cleared all mask storage")
 
         return {"status": "success", "message": "rectangles cleared"}
     except Exception as e:

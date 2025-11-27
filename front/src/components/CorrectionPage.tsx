@@ -35,13 +35,14 @@ interface CorrectionPageProps {
     onBack: () => void
 }
 
-interface CornerPoint {
-    id: string;
-    position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
-}
-
 function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const [currentImageIndex, setCurrentImageIndex] = useState(0)
+    const [imagesList, setImagesList] = useState<File[]>(images)
+    // Track backend indices for each image in the list
+    // This is needed because when images are deleted from the frontend list,
+    // the backend still uses the original sequential indices (0, 1, 2, etc.)
+    // backendIndices[i] tells us which backend file index corresponds to frontend position i
+    const [backendIndices, setBackendIndices] = useState<number[]>(images.map((_, i) => i))
     const [pointType, setPointType] = useState<'positive' | 'negative'>('positive')
     const [algoType, setAlgoType] = useState<'union' | 'intersection' | 'iou'>('union')
     const [startType, setStartType] = useState<'segmented' | 'scratch'>('segmented')
@@ -61,12 +62,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const [currentRect, setCurrentRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
     const [justDrewRectangle, setJustDrewRectangle] = useState(false);
     const [isImageLoaded, setIsImageLoaded] = useState(false);
-    const [cornerPoints] = useState<CornerPoint[]>([
-        { id: 'tl', position: 'top-left' },
-        { id: 'tr', position: 'top-right' },
-        { id: 'bl', position: 'bottom-left' },
-        { id: 'br', position: 'bottom-right' },
-    ]);
     const [imageDisplayInfo, setImageDisplayInfo] = useState<{
         displayedWidth: number;
         displayedHeight: number;
@@ -78,9 +73,12 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const [zoomPosition, setZoomPosition] = useState({ x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
 
-    const currentImage = images[currentImageIndex]
+    const currentImage = imagesList[currentImageIndex]
+    // Get the backend file index for the current frontend image
+    const currentBackendIndex = backendIndices[currentImageIndex]
 
     let imageLoadLogCount = 0;
 
@@ -162,7 +160,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const tryLoadExistingProcessed = useCallback(async (): Promise<boolean> => {
         if (!groupId) return false;
         try {
-            const resp = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`, { cache: 'no-store' });
+            const resp = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`, { cache: 'no-store' });
             if (!resp.ok) return false;
             const blob = await resp.blob();
             if (blob.size === 0) return false;
@@ -172,7 +170,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         } catch (_) {
             return false;
         }
-    }, [groupId, currentImageIndex]);
+    }, [groupId, currentBackendIndex]);
 
     // Effet d'initialisation PRINCIPAL - UN SEUL
     useEffect(() => {
@@ -205,15 +203,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             }
 
             try {
-                // Créer l'étape initiale AVANT de charger les images
+                // Initialize empty steps list
                 if (isMounted) {
-                    const initialUrl = URL.createObjectURL(currentImage);
-                    setSegmentationSteps([{
-                        id: stepIdCounter.current++,
-                        imageUrl: initialUrl,
-                        stepName: 'initial',
-                        timestamp: new Date()
-                    }]);
+                    setSegmentationSteps([]);
                 }
 
                 // Charger la segmentation initiale
@@ -239,7 +231,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         return () => {
             isMounted = false;
         };
-    }, [groupId, currentImageIndex]);
+    }, [groupId, currentBackendIndex]);
 
     // Debug: surveiller les changements de l'URL traitée
     useEffect(() => {
@@ -249,39 +241,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             isLoading
         });
     }, [processedImageUrl, isLoading]);
-
-    const getCornerPointStyle = useCallback((position: string) => {
-        if (!imageDisplayInfo) return { display: 'none' };
-
-        const { displayedWidth, displayedHeight, offsetX, offsetY } = imageDisplayInfo;
-        const pointSize = 8;
-        const offset = 4;
-
-        switch (position) {
-            case 'top-left':
-                return {
-                    left: offsetX + offset,
-                    top: offsetY + offset,
-                };
-            case 'top-right':
-                return {
-                    left: offsetX + displayedWidth - pointSize - offset,
-                    top: offsetY + offset,
-                };
-            case 'bottom-left':
-                return {
-                    left: offsetX + offset,
-                    top: offsetY + displayedHeight - pointSize - offset,
-                };
-            case 'bottom-right':
-                return {
-                    left: offsetX + displayedWidth - pointSize - offset,
-                    top: offsetY + displayedHeight - pointSize - offset,
-                };
-            default:
-                return {};
-        }
-    }, [imageDisplayInfo]);
 
     // Réinitialiser le zoom quand l'image change
     useEffect(() => {
@@ -294,7 +253,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
         setIsLoading(true);
         try {
-            const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`, { cache: 'no-store' });
+            const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`, { cache: 'no-store' });
 
             if (response.ok) {
                 const blob = await response.blob();
@@ -322,7 +281,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         if (!groupId) return;
 
         try {
-            const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`);
+            const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`);
             if (response.ok) {
                 const blob = await response.blob();
                 setInitialSegmentationUrl(prev => {
@@ -340,7 +299,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         if (!groupId) return false;
         for (let i = 0; i < maxAttempts; i++) {
             try {
-                const resp = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`, { cache: 'no-store' });
+                const resp = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`, { cache: 'no-store' });
                 if (resp.ok) {
                     const blob = await resp.blob();
                     if (blob.size > 0) {
@@ -358,7 +317,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             await new Promise(r => setTimeout(r, intervalMs));
         }
         return false;
-    }, [groupId, currentImageIndex]);
+    }, [groupId, currentBackendIndex]);
 
     const removeSegmentationStep = (id: number) => {
         setSegmentationSteps(prev => {
@@ -380,7 +339,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         try {
             const imageBuffer = await imageBlob.arrayBuffer();
             const response = await fetch(
-                `/api/files/group/${groupId}/${currentImageIndex}/save_step?stepName=${encodeURIComponent(stepName)}`,
+                `/api/files/group/${groupId}/${currentBackendIndex}/save_step?stepName=${encodeURIComponent(stepName)}`,
                 {
                     method: 'POST',
                     headers: {
@@ -402,11 +361,10 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
         setIsProcessingFull(true);
         try {
-            const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/process`, { method: 'POST' });
+            const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/process`, { method: 'POST' });
 
             if (response.ok) {
-                // Après succès, récupérer l'image traitée via /result (le backend renvoie JSON pour /process)
-                const resultResp = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`);
+                const resultResp = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`);
                 if (!resultResp.ok) {
                     throw new Error(`Erreur lors du chargement du résultat: ${resultResp.status}`);
                 }
@@ -445,131 +403,129 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             }
         } catch (error) {
             console.error('Erreur API lors de la segmentation totale:', error);
-            alert(`Erreur lors de la segmentation totale: ${error.message}`);
+            alert(`Erreur lors de la segmentation totale: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             setIsProcessingFull(false);
         }
     };
 
-    const applySegmentationWithPoints = async (pointsList: Point[]) => {
-        if (!groupId || !imageDisplayInfo) return;
+    const handleAddImageClick = () => {
+        fileInputRef.current?.click();
+    };
 
-        setIsLoading(true);
-        try {
-            const img = imageRef.current;
-            if (!img) return;
+    const handleDeleteImage = (index: number, e: React.MouseEvent) => {
+        e.stopPropagation(); // Prevent triggering the image selection
+        
+        if (imagesList.length === 1) {
+            alert('Cannot delete the last image');
+            return;
+        }
 
-            const naturalWidth = img.naturalWidth;
-            const naturalHeight = img.naturalHeight;
-
-            let response: Response | null = null;
-            let stepName = '';
-
-            if (algoType === 'union') {
-                const positivePoints = pointsList.filter(p => p.type === 'positive');
-                if (positivePoints.length === 0) {
-                    if (pointsList.length === 0) {
-                        await clearPoints();
-                    }
-                    return;
-                }
-
-                // Reset the server state first
-                await fetch(
-                    `/api/files/group/${groupId}/${currentImageIndex}/clear_points`,
-                    { method: 'POST' }
-                );
-
-                // Apply points one by one to rebuild the state
-                let lastResponse = null;
-                for (let i = 0; i < positivePoints.length; i++) {
-                    const point = positivePoints[i];
-                    const scaledPoint = {
-                        x: Math.round(point.relX * naturalWidth),
-                        y: Math.round(point.relY * naturalHeight)
-                    };
-
-                    lastResponse = await fetch(
-                        `/api/files/group/${groupId}/${currentImageIndex}/segment_union?x=${scaledPoint.x}&y=${scaledPoint.y}&pointCount=${i + 1}&startType=${startType}`,
-                        { method: 'POST' }
-                    );
-                }
-                response = lastResponse;
-                stepName = `step_union_${positivePoints.length}_${Date.now()}`;
-
-            } else if (algoType === 'intersection') {
-                const negativePoints = pointsList.filter(p => p.type === 'negative');
-                if (negativePoints.length === 0) {
-                    if (pointsList.length === 0) {
-                        await clearPoints();
-                    }
-                    return;
-                }
-
-                // Pour l'intersection, on utilise l'endpoint segment_intersection
-                const lastNegativePoint = negativePoints[negativePoints.length - 1];
-                const scaledPoint = {
-                    x: Math.round(lastNegativePoint.relX * naturalWidth),
-                    y: Math.round(lastNegativePoint.relY * naturalHeight)
-                };
-
-                const intersectionUrl = `/api/files/group/${groupId}/${currentImageIndex}/segment_intersection?x=${scaledPoint.x}&y=${scaledPoint.y}&pointCount=${negativePoints.length}&startType=${startType}`;
-                response = await fetch(intersectionUrl, { method: 'POST' });
-                stepName = `step_intersection_${negativePoints.length}_${Date.now()}`;
-
-            } else {
-                // IOU algorithm - envoie tous les points en une fois
-                const positivePoints = pointsList.filter(p => p.type === 'positive')
-                    .map(p => [Math.round(p.relX * naturalWidth), Math.round(p.relY * naturalHeight)]);
-                const negativePoints = pointsList.filter(p => p.type === 'negative')
-                    .map(p => [Math.round(p.relX * naturalWidth), Math.round(p.relY * naturalHeight)]);
-
-                const formData = new FormData();
-                formData.append('positivePoints', JSON.stringify(positivePoints));
-                formData.append('negativePoints', JSON.stringify(negativePoints));
-                formData.append('startType', startType);
-
-                response = await fetch(
-                    `/api/files/group/${groupId}/${currentImageIndex}/segment_with_points`,
-                    {
-                        method: 'POST',
-                        body: formData
-                    }
-                );
-                stepName = `step_iou_${pointsList.length}_${Date.now()}`;
-            }
-
-            if (response && response.ok) {
-                const blob = await response.blob();
-                if (blob.size === 0) {
-                    throw new Error('Image vide reçue du serveur');
-                }
-
+        if (confirm('Are you sure you want to delete this image?')) {
+            const isDeletingCurrentImage = index === currentImageIndex;
+            
+            // Remove from local list
+            setImagesList(prev => prev.filter((_, i) => i !== index));
+            // Remove corresponding backend index
+            setBackendIndices(prev => prev.filter((_, i) => i !== index));
+            
+            // Reset state if deleting the current image
+            if (isDeletingCurrentImage) {
+                setPoints([]);
+                setRectangles([]);
+                setSelectedStepId(null);
+                setSegmentationSteps([]);
                 if (processedImageUrl) {
                     URL.revokeObjectURL(processedImageUrl);
+                    setProcessedImageUrl('');
                 }
-                const newUrl = URL.createObjectURL(blob);
-                setProcessedImageUrl(newUrl);
-
-                // Sauvegarder l'étape si nécessaire
-                if (pointsList.length > 0) {
-                    await saveStepImage(blob, stepName);
-                    const stepUrl = URL.createObjectURL(blob);
-                    const newStep: SegmentationStep = {
-                        id: stepIdCounter.current++,
-                        imageUrl: stepUrl,
-                        stepName: stepName,
-                        timestamp: new Date()
-                    };
-                    setSegmentationSteps(prev => [...prev, newStep]);
+                if (initialSegmentationUrl) {
+                    URL.revokeObjectURL(initialSegmentationUrl);
+                    setInitialSegmentationUrl('');
                 }
             }
+            
+            // Adjust current index if needed
+            if (index === currentImageIndex) {
+                // If deleting current image, move to previous or next
+                if (index > 0) {
+                    setCurrentImageIndex(index - 1);
+                } else {
+                    setCurrentImageIndex(0);
+                }
+            } else if (index < currentImageIndex) {
+                // If deleting before current, adjust index
+                setCurrentImageIndex(prev => prev - 1);
+            }
+            
+            console.log('Image deleted successfully');
+        }
+    };
 
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
+
+        const newImage = files[0];
+        
+        // Validate it's an image
+        if (!newImage.type.startsWith('image/')) {
+            alert('Please select a valid image file');
+            return;
+        }
+
+        try {
+            setIsLoading(true);
+            
+            // Upload the new image to the backend using the existing upload endpoint
+            const formData = new FormData();
+            formData.append('files', newImage);
+            
+            const response = await fetch(`/api/files/group/${groupId}/upload`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to upload image');
+            }
+
+            // Add to local images list
+            setImagesList(prev => [...prev, newImage]);
+            
+            // Track the backend index for this new image
+            // The backend assigns sequential indices based on total uploads
+            const newBackendIndex = backendIndices.length > 0 ? Math.max(...backendIndices) + 1 : imagesList.length;
+            setBackendIndices(prev => [...prev, newBackendIndex]);
+            
+            // Reset the page state for the new image
+            setPoints([]);
+            setRectangles([]);
+            setSelectedStepId(null);
+            setSegmentationSteps([]);
+            if (processedImageUrl) {
+                URL.revokeObjectURL(processedImageUrl);
+                setProcessedImageUrl('');
+            }
+            if (initialSegmentationUrl) {
+                URL.revokeObjectURL(initialSegmentationUrl);
+                setInitialSegmentationUrl('');
+            }
+            
+            // Switch to the new image (it will be at the end of the list)
+            const newIndex = imagesList.length;
+            setCurrentImageIndex(newIndex);
+            
+            console.log('New image added successfully with backend index:', newBackendIndex);
         } catch (error) {
-            console.error('Erreur API:', error);
-            alert(`Erreur lors de la segmentation: ${error.message}`);
+            console.error('Error adding image:', error);
+            alert(`Error adding image: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             setIsLoading(false);
+            // Reset the input
+            if (e.target) {
+                e.target.value = '';
+            }
         }
     };
 
@@ -603,11 +559,10 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             id: pointIdCounter.current++
         };
 
-        const newPoints = [...points, newPoint];
-        setPoints(newPoints);
+        setPoints(prev => [...prev, newPoint]);
 
-        // Appliquer les points avec les rectangles existants
-        await applyAllCorrections(newPoints, rectangles);
+        // Apply only the new point incrementally
+        await applyNewPoint(newPoint);
     };
 
     const getDisplayCoordinates = useCallback((relX: number, relY: number) => {
@@ -674,26 +629,26 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         setPoints(newPoints);
 
         if (newPoints.length === 0) {
+            // No points left, just clear
             await clearPoints();
         } else {
-            // Réappliquer tous les points restants avec les rectangles
-            await applyAllCorrections(newPoints, rectangles);
-            
-            // Mettre à jour l'image finale après l'undo
-            if (groupId) {
-                try {
-                    const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`);
-                    if (response.ok) {
-                        const blob = await response.blob();
-                        if (processedImageUrl) {
-                            URL.revokeObjectURL(processedImageUrl);
-                        }
-                        const newUrl = URL.createObjectURL(blob);
-                        setProcessedImageUrl(newUrl);
-                    }
-                } catch (error) {
-                    console.error('Error updating final mask after undo:', error);
+            // Rebuild state by clearing and reapplying all remaining points
+            setIsLoading(true);
+            try {
+                // Clear points on backend
+                await fetch(
+                    `/api/files/group/${groupId}/${currentBackendIndex}/clear_points`,
+                    { method: 'POST' }
+                );
+
+                // Reapply all remaining points incrementally
+                for (const point of newPoints) {
+                    await applyNewPoint(point);
                 }
+            } catch (error) {
+                console.error('Error during undo:', error);
+            } finally {
+                setIsLoading(false);
             }
         }
     };
@@ -701,7 +656,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const clearPoints = async () => {
         try {
             const response = await fetch(
-                `/api/files/group/${groupId}/${currentImageIndex}/clear_points`,
+                `/api/files/group/${groupId}/${currentBackendIndex}/clear_points`,
                 { method: 'POST' }
             );
 
@@ -728,7 +683,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             console.log('=== DÉBUT TÉLÉCHARGEMENT ===');
 
             // Méthode 1: Télécharger directement depuis l'API
-            const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/result`);
+            const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`);
 
             if (!response.ok) {
                 throw new Error(`Erreur HTTP: ${response.status}`);
@@ -789,12 +744,12 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             console.log('Réinitialisation de l\'état serveur...');
 
             // Réinitialiser les points
-            await fetch(`/api/files/group/${groupId}/${currentImageIndex}/clear_points`, {
+            await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/clear_points`, {
                 method: 'POST'
             });
 
             // Réinitialiser les rectangles
-            await fetch(`/api/files/group/${groupId}/${currentImageIndex}/clear_rectangles`, {
+            await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/clear_rectangles`, {
                 method: 'POST'
             });
 
@@ -814,7 +769,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     };
 
     const handleZoomIn = () => {
-        setZoomScale(prev => Math.min(prev * 1.5, 5)); // Zoom max 5x
+        setZoomScale(prev => Math.min(prev * 1.5, 10)); // Zoom max 10x
     };
 
     const handleZoomOut = () => {
@@ -900,9 +855,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 id: pointIdCounter.current++
             };
 
-            const newPoints = [...points, newPoint];
-            setPoints(newPoints);
-            applyAllCorrections(newPoints, rectangles);
+            setPoints(prev => [...prev, newPoint]);
+            // Apply only the new point incrementally
+            applyNewPoint(newPoint);
         }
     };
 
@@ -1001,9 +956,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                     relHeight: relHeight
                 };
 
-                const updatedRectangles = [...rectangles, newRectangle];
-                setRectangles(updatedRectangles);
-                applyAllCorrections(points, updatedRectangles);
+                setRectangles(prev => [...prev, newRectangle]);
+                // Apply only the new rectangle incrementally
+                applyNewRectangle(newRectangle);
             }
 
             cancelRectangleMode();
@@ -1037,141 +992,160 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         setIsDrawingRect(false);
     };
 
-    const applyAllRectangles = async (rectanglesList: Rectangle[]) => {
-        if (!groupId || rectanglesList.length === 0) return;
+    // Apply only the new rectangle (incremental approach)
+    const applyNewRectangle = async (rect: Rectangle) => {
+        if (!groupId) return;
 
         setIsLoading(true);
         try {
-            console.log('Application de tous les rectangles:', {
-                rectangles: rectanglesList.length
-            });
+            const img = imageRef.current;
+            if (!img) return;
 
-            // Réinitialiser les rectangles côté serveur
-            const resetResponse = await fetch(
-                `/api/files/group/${groupId}/${currentImageIndex}/clear_rectangles`,
+            const naturalWidth = img.naturalWidth;
+            const naturalHeight = img.naturalHeight;
+
+            const originalRect = {
+                x: Math.round(rect.relX * naturalWidth),
+                y: Math.round(rect.relY * naturalHeight),
+                width: Math.round(rect.relWidth * naturalWidth),
+                height: Math.round(rect.relHeight * naturalHeight)
+            };
+
+            console.log('Applying new rectangle:', originalRect);
+
+            const response = await fetch(
+                `/api/files/group/${groupId}/${currentBackendIndex}/remove_rectangle?x=${originalRect.x}&y=${originalRect.y}&width=${originalRect.width}&height=${originalRect.height}&startType=${startType}`,
                 { method: 'POST' }
             );
 
-            if (!resetResponse.ok) {
-                console.warn('Impossible de réinitialiser les rectangles');
+            if (!response.ok) {
+                console.error('Error applying rectangle');
+                return;
             }
 
-            // Appliquer chaque rectangle en séquence
-            let lastResponse = null;
-            for (const rect of rectanglesList) {
-                const img = imageRef.current;
-                if (!img) continue;
-
-                const naturalWidth = img.naturalWidth;
-                const naturalHeight = img.naturalHeight;
-
-                const originalRect = {
-                    x: Math.round(rect.relX * naturalWidth),
-                    y: Math.round(rect.relY * naturalHeight),
-                    width: Math.round(rect.relWidth * naturalWidth),
-                    height: Math.round(rect.relHeight * naturalHeight)
-                };
-
-                lastResponse = await fetch(
-                    `/api/files/group/${groupId}/${currentImageIndex}/remove_rectangle?x=${originalRect.x}&y=${originalRect.y}&width=${originalRect.width}&height=${originalRect.height}&startType=${startType}`,
-                    { method: 'POST' }
-                );
-
-                if (!response.ok) {
-                    console.error('Erreur avec un rectangle');
-                    const errorText = await response.text();
-                    console.error('Détails de l\'erreur:', errorText);
-                    break;
-                }
-
-                const blob = await response.blob();
-                if (processedImageUrl) {
-                    URL.revokeObjectURL(processedImageUrl);
-                }
-                const url = URL.createObjectURL(blob);
-                setProcessedImageUrl(url);
-
-                await new Promise(resolve => setTimeout(resolve, 100));
+            const blob = await response.blob();
+            
+            // Save the step with a meaningful name
+            const rectangleIndex = rectangles.length;
+            const stepName = `rectangle_${rectangleIndex}_removal`;
+            
+            await saveStepImage(blob, stepName);
+            const stepUrl = URL.createObjectURL(blob);
+            const newStep: SegmentationStep = {
+                id: stepIdCounter.current++,
+                imageUrl: stepUrl,
+                stepName: stepName,
+                timestamp: new Date()
+            };
+            setSegmentationSteps(prev => [...prev, newStep]);
+            
+            if (processedImageUrl) {
+                URL.revokeObjectURL(processedImageUrl);
             }
+            const url = URL.createObjectURL(blob);
+            setProcessedImageUrl(url);
 
-            if (points.length > 0) {
-                console.log('Réapplication des points après les rectangles');
-                await applySegmentationWithPoints(points);
-            }
-
-            console.log('Rectangles et points appliqués avec succès');
+            console.log('Rectangle applied successfully');
         } catch (error) {
-            console.error('Erreur API:', error);
-            alert(`Erreur lors de l'application des rectangles: ${error.message}`);
+            console.error('Error applying rectangle:', error);
+            alert(`Error: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             setIsLoading(false);
         }
     };
 
-    const applyAllCorrections = async (pointsList: Point[], rectanglesList: Rectangle[]) => {
-        if (!groupId) return;
+    // Apply only the new point (incremental approach)
+    const applyNewPoint = async (point: Point) => {
+        if (!groupId || !imageDisplayInfo) return;
 
         setIsLoading(true);
         try {
-            console.log('Application de toutes les corrections:', {
-                points: pointsList.length,
-                rectangles: rectanglesList.length
-            });
+            const img = imageRef.current;
+            if (!img) return;
 
-            const resetResponse = await fetch(
-                `/api/files/group/${groupId}/${currentImageIndex}/clear_rectangles`,
-                { method: 'POST' }
-            );
+            const naturalWidth = img.naturalWidth;
+            const naturalHeight = img.naturalHeight;
 
-            if (!resetResponse.ok) {
-                console.warn('Impossible de réinitialiser les rectangles');
+            const scaledPoint = {
+                x: Math.round(point.relX * naturalWidth),
+                y: Math.round(point.relY * naturalHeight)
+            };
+
+            console.log('Applying new point:', scaledPoint, 'type:', point.type);
+
+            let response: Response | null = null;
+
+            if (algoType === 'union' && point.type === 'positive') {
+                // Get current point count of same type
+                const positivePoints = points.filter(p => p.type === 'positive');
+                const pointCount = positivePoints.length + 1; // +1 for the new point
+
+                response = await fetch(
+                    `/api/files/group/${groupId}/${currentBackendIndex}/segment_union?x=${scaledPoint.x}&y=${scaledPoint.y}&pointCount=${pointCount}&startType=${startType}`,
+                    { method: 'POST' }
+                );
+            } else if (algoType === 'intersection' && point.type === 'negative') {
+                const negativePoints = points.filter(p => p.type === 'negative');
+                const pointCount = negativePoints.length + 1;
+
+                response = await fetch(
+                    `/api/files/group/${groupId}/${currentBackendIndex}/segment_intersection?x=${scaledPoint.x}&y=${scaledPoint.y}&pointCount=${pointCount}&startType=${startType}`,
+                    { method: 'POST' }
+                );
+            } else {
+                // For IOU or mismatched types, use segment_with_points with all points
+                const allPoints = [...points, point];
+                const positivePoints = allPoints.filter(p => p.type === 'positive')
+                    .map(p => [Math.round(p.relX * naturalWidth), Math.round(p.relY * naturalHeight)]);
+                const negativePoints = allPoints.filter(p => p.type === 'negative')
+                    .map(p => [Math.round(p.relX * naturalWidth), Math.round(p.relY * naturalHeight)]);
+
+                const formData = new FormData();
+                formData.append('positivePoints', JSON.stringify(positivePoints));
+                formData.append('negativePoints', JSON.stringify(negativePoints));
+                formData.append('startType', startType);
+
+                response = await fetch(
+                    `/api/files/group/${groupId}/${currentBackendIndex}/segment_with_points`,
+                    {
+                        method: 'POST',
+                        body: formData
+                    }
+                );
             }
 
-            if (rectanglesList.length > 0) {
-                let lastResponse = null;
-                for (const rect of rectanglesList) {
-                    const img = imageRef.current;
-                    if (!img) continue;
-
-                    const naturalWidth = img.naturalWidth;
-                    const naturalHeight = img.naturalHeight;
-
-                    const originalRect = {
-                        x: Math.round(rect.relX * naturalWidth),
-                        y: Math.round(rect.relY * naturalHeight),
-                        width: Math.round(rect.relWidth * naturalWidth),
-                        height: Math.round(rect.relHeight * naturalHeight)
-                    };
-
-                    lastResponse = await fetch(
-                        `/api/files/group/${groupId}/${currentImageIndex}/remove_rectangle?x=${originalRect.x}&y=${originalRect.y}&width=${originalRect.width}&height=${originalRect.height}&startType=${startType}`,
-                        { method: 'POST' }
-                    );
-
-                    if (!lastResponse.ok) {
-                        console.error('Erreur avec un rectangle');
-                        break;
-                    }
+            if (response && response.ok) {
+                const blob = await response.blob();
+                if (blob.size === 0) {
+                    throw new Error('Empty image received from server');
                 }
 
-                if (lastResponse && lastResponse.ok) {
-                    const blob = await lastResponse.blob();
-                    if (processedImageUrl) {
-                        URL.revokeObjectURL(processedImageUrl);
-                    }
-                    const url = URL.createObjectURL(blob);
-                    setProcessedImageUrl(url);
+                // Save the step with a meaningful name
+                const pointType = point.type === 'positive' ? 'positive' : 'negative';
+                const pointIndex = points.filter(p => p.type === point.type).length + 1;
+                const stepName = `point_${pointIndex}_${algoType}_${pointType}`;
+                
+                await saveStepImage(blob, stepName);
+                const stepUrl = URL.createObjectURL(blob);
+                const newStep: SegmentationStep = {
+                    id: stepIdCounter.current++,
+                    imageUrl: stepUrl,
+                    stepName: stepName,
+                    timestamp: new Date()
+                };
+                setSegmentationSteps(prev => [...prev, newStep]);
+
+                if (processedImageUrl) {
+                    URL.revokeObjectURL(processedImageUrl);
                 }
-            }
+                const newUrl = URL.createObjectURL(blob);
+                setProcessedImageUrl(newUrl);
 
-            if (pointsList.length > 0) {
-                await applySegmentationWithPoints(pointsList);
+                console.log('Point applied successfully');
             }
-
-            console.log('Toutes les corrections appliquées avec succès');
         } catch (error) {
-            console.error('Erreur lors de l\'application des corrections:', error);
-            alert(`Erreur: ${error.message}`);
+            console.error('Error applying point:', error);
+            alert(`Error applying point: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             setIsLoading(false);
         }
@@ -1205,13 +1179,13 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             if (selectedStepId) {
                 const step = segmentationSteps.find(step => step.id === selectedStepId);
                 if (!step) throw new Error("Selected step not found");
-                const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/step/${step.stepName}`);
+                const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/step/${step.stepName}`);
                 if (!response.ok) throw new Error("Failed to fetch selected step mask");
                 previousMaskBlob = await response.blob();
             } else if (segmentationSteps.length > 0) {
                 // Get the last step's mask from the backend
                 const lastStep = segmentationSteps[segmentationSteps.length - 1];
-                const response = await fetch(`/api/files/group/${groupId}/${currentImageIndex}/step/${lastStep.stepName}`);
+                const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/step/${lastStep.stepName}`);
                 if (!response.ok) throw new Error("Failed to fetch previous step mask");
                 previousMaskBlob = await response.blob();
             } else {
@@ -1233,7 +1207,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             }
 
             const response = await fetch(
-                `/api/files/group/${groupId}/${currentImageIndex}/${endpoint}`,
+                `/api/files/group/${groupId}/${currentBackendIndex}/${endpoint}`,
                 {
                     method: 'POST',
                     body: previousMaskBlob
@@ -1298,9 +1272,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             <header className="correction-header">
                 <h1>PlantSAM</h1>
                 <div>
-                    <span style={{ marginRight: '1rem', color: '#666' }}>
-                        Group: {groupId.substring(0, 8)}...
-                    </span>
                     <button className="back-button" onClick={onBack}>
                         Back
                     </button>
@@ -1309,9 +1280,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
             <div className="correction-layout">
                 <div className="images-sidebar">
-                    <h3>Images ({images.length})</h3>
+                    <h3>Images ({imagesList.length})</h3>
                     <div className="images-list">
-                        {images.map((image, index) => (
+                        {imagesList.map((image, index) => (
                             <div
                                 key={index}
                                 className={`image-item ${index === currentImageIndex ? 'active' : ''}`}
@@ -1325,9 +1296,25 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                                 {index === currentImageIndex && (
                                     <div className="active-indicator"></div>
                                 )}
+                                <button
+                                    className="delete-image-button"
+                                    onClick={(e) => handleDeleteImage(index, e)}
+                                    title="Delete image"
+                                >
+                                </button>
                             </div>
                         ))}
                     </div>
+                    <input
+                        type="file"
+                        ref={fileInputRef}
+                        style={{ display: 'none' }}
+                        accept="image/*"
+                        onChange={handleFileSelect}
+                    />
+                    <button className="add-image-button" onClick={handleAddImageClick}>
+                        + Add Image
+                    </button>
                 </div>
 
                 <div className="correction-content">
@@ -1379,7 +1366,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                                         <div className="zoom-controls">
                                             <button
                                                 onClick={handleZoomIn}
-                                                disabled={zoomScale >= 5}
+                                                disabled={zoomScale >= 10}
                                                 title="Zoom In"
                                             >
                                                 +
@@ -1407,7 +1394,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                                     onMouseDown={handleMouseDown}
                                     onMouseMove={handleMouseMove}
                                     onMouseUp={handleMouseUp}
-                                    onMouseLeave={(e) => {
+                                    onMouseLeave={() => {
                                         if (isDragging) {
                                             setIsDragging(false);
                                         }
@@ -1445,16 +1432,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                                                 height: 'auto',
                                             }}
                                         />
-
-                                        {/* Points d'angle - seulement quand pas zoomé */}
-                                        {isImageLoaded && imageDisplayInfo && zoomScale === 1 && cornerPoints.map(point => (
-                                            <div
-                                                key={point.id}
-                                                className="corner-point"
-                                                style={getCornerPointStyle(point.position)}
-                                                title={`Corner point ${point.position}`}
-                                            />
-                                        ))}
 
                                         {/* Points - DÉPLACÉS dans le conteneur de zoom */}
                                         {points.map(point => {

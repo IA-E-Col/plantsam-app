@@ -122,6 +122,35 @@ public class FileController {
         }
     }
 
+    @GetMapping("/group/{groupId}/{fileId}/original")
+    public ResponseEntity<byte[]> getOriginalImage(@PathVariable("groupId") String groupId,
+                                                   @PathVariable("fileId") int fileId) {
+        try {
+            byte[] fileData = fileService.getOriginalImage(groupId, fileId);
+            if (fileData == null) {
+                return ResponseEntity.notFound().build();
+            }
+
+            return ResponseEntity.ok()
+                    .header("Content-Type", "application/octet-stream")
+                    .header("Content-Disposition",
+                            "attachment; filename=\"original-file-" + fileId + "\"")
+                    .body(fileData);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
+
+    @GetMapping("/group/{groupId}/count")
+    public ResponseEntity<String> getFileCount(@PathVariable("groupId") String groupId) {
+        try {
+            int count = fileService.getFileCount(groupId);
+            return ResponseEntity.ok("{\"count\": " + count + "}");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("{\"error\": \"" + e.getMessage() + "\"}");
+        }
+    }
+
     @DeleteMapping("/group/{groupId}/delete")
     public ResponseEntity<String> deleteGroup(@PathVariable("groupId") String groupId) {
         try {

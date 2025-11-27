@@ -26,20 +26,209 @@ public class FileService {
     private Map<String, FileGroup> fileGroups;
     private Path storagePath = Paths.get("uploads");
     private Path processedPath =  Paths.get("processed");
+    private Path segmentedPath = Paths.get("segmented");
 
     public FileService(
             @Value("${file.upload-dir:uploads}") String uploadDir,
-            @Value("${file.processed-dir:processed}") String processedDir) {
+            @Value("${file.processed-dir:processed}") String processedDir,
+            @Value("${file.segmented-dir:segmented}") String segmentedDir) {
         this.storagePath = Paths.get(uploadDir).toAbsolutePath().normalize();
         this.processedPath = Paths.get(processedDir).toAbsolutePath().normalize();
+        this.segmentedPath = Paths.get(segmentedDir).toAbsolutePath().normalize();
         fileGroups = new HashMap<>();
 
         try {
             Files.createDirectories(storagePath);
             Files.createDirectories(processedPath);
+            Files.createDirectories(segmentedPath);
+            
+            // Reconstruct fileGroups from existing disk folders
+            reconstructFileGroupsFromDisk();
         } catch (IOException e) {
             throw new RuntimeException("Could not create upload directories", e);
         }
+    }
+    
+    /**
+     * Reconstructs the fileGroups HashMap from existing folders on disk.
+     * This is called on service initialization to restore projects after server restart.
+     */
+    private void reconstructFileGroupsFromDisk() throws IOException {
+        System.out.println("🔄 Reconstructing file groups from disk...");
+        
+        // Scan uploads directory for group folders
+        if (!Files.exists(storagePath)) {
+            System.out.println("⚠️ No uploads directory found, skipping reconstruction");
+            return;
+        }
+        
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(storagePath)) {
+            for (Path groupDir : stream) {
+                if (!Files.isDirectory(groupDir)) continue;
+                
+                String groupId = groupDir.getFileName().toString();
+                
+                // Find corresponding processed and segmented directories
+                Path processedDir = processedPath.resolve(groupId);
+                
+                // Get files from the upload directory
+                List<Path> uploadedFiles = new ArrayList<>();
+                try (DirectoryStream<Path> fileStream = Files.newDirectoryStream(groupDir)) {
+                    for (Path file : fileStream) {
+                        if (Files.isRegularFile(file)) {
+                            // Skip metadata files
+                            String fileName = file.getFileName().toString();
+                            if (!fileName.startsWith(".")) {
+                                uploadedFiles.add(file);
+                            }
+                        }
+                    }
+                }
+                
+                if (uploadedFiles.isEmpty()) {
+                    System.out.println("⚠️ Skipping empty group: " + groupId);
+                    continue;
+                }
+                
+                // Sort files by their index suffix (e.g., image_0.png, image_1.png)
+                uploadedFiles.sort((a, b) -> {
+                    String nameA = a.getFileName().toString();
+                    String nameB = b.getFileName().toString();
+                    
+                    // Extract index from filename (format: basename_index.ext)
+                    int indexA = extractFileIndex(nameA);
+                    int indexB = extractFileIndex(nameB);
+                    
+                    return Integer.compare(indexA, indexB);
+                });
+                
+                // Determine project name from metadata file or segmented folders
+                String projectName = loadProjectMetadata(groupId);
+                if (projectName == null) {
+                    projectName = findProjectNameForGroup(groupId);
+                }
+                if (projectName == null) {
+                    // Fallback: use groupId as project name if no metadata or segmented folder found
+                    projectName = "project_" + groupId.substring(0, 8);
+                }
+                
+                Path segmentedDir = segmentedPath.resolve(projectName);
+                
+                // Create FileGroup
+                FileGroup fileGroup = new FileGroup(projectName);
+                fileGroup.setUploadDirPath(groupDir);
+                fileGroup.setProcessedDirPath(processedDir);
+                fileGroup.setSegmentedDirPath(segmentedDir);
+                
+                // Add all files to the group
+                for (int i = 0; i < uploadedFiles.size(); i++) {
+                    Path file = uploadedFiles.get(i);
+                    fileGroup.addOriginalFile(i, file.toString());
+                    
+                    // Check if any processed file exists with various possible prefixes
+                    String originalFileName = file.getFileName().toString();
+                    Path processedFile = findProcessedFile(processedDir, originalFileName);
+                    if (processedFile != null) {
+                        fileGroup.addProcessedFile(i, processedFile.toString());
+                    }
+                    
+                    // Check if segmented file exists
+                    String baseName = FilenameUtils.removeExtension(originalFileName);
+                    String segmentedFileName = baseName + "_mask.png";
+                    Path segmentedFile = segmentedDir.resolve(segmentedFileName);
+                    if (Files.exists(segmentedFile)) {
+                        fileGroup.addSegmentedFile(i, segmentedFile.toString());
+                    }
+                }
+                
+                fileGroups.put(groupId, fileGroup);
+                System.out.println("✅ Reconstructed group: " + groupId + " (" + projectName + ") with " + uploadedFiles.size() + " files");
+            }
+        }
+        
+        System.out.println("✅ Reconstruction complete. Total groups: " + fileGroups.size());
+    }
+    
+    /**
+     * Finds a processed file that corresponds to the original filename.
+     * Checks various possible prefixes used during processing.
+     */
+    private Path findProcessedFile(Path processedDir, String originalFileName) throws IOException {
+        if (!Files.exists(processedDir)) return null;
+        
+        // Common prefixes used during image processing
+        String[] prefixes = {
+            "processed_",
+            "cleared_points_",
+            "cleared_rectangles_",
+            "segmented_with_points_",
+            "union_segmented_",
+            "intersection_segmented_",
+            "negative_point_",
+            "positive_",
+            "negative_"
+        };
+        
+        // Try each prefix
+        for (String prefix : prefixes) {
+            Path candidateFile = processedDir.resolve(prefix + originalFileName);
+            if (Files.exists(candidateFile)) {
+                return candidateFile;
+            }
+        }
+        
+        // Also check for files that end with the original filename (for step files)
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(processedDir)) {
+            for (Path file : stream) {
+                String fileName = file.getFileName().toString();
+                if (fileName.endsWith(originalFileName)) {
+                    return file;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Extracts the file index from a filename with format: basename_index.ext
+     */
+    private int extractFileIndex(String fileName) {
+        String nameWithoutExt = FilenameUtils.removeExtension(fileName);
+        int lastUnderscore = nameWithoutExt.lastIndexOf('_');
+        if (lastUnderscore != -1) {
+            try {
+                return Integer.parseInt(nameWithoutExt.substring(lastUnderscore + 1));
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0;
+    }
+    
+    /**
+     * Finds the project name by checking which segmented folder corresponds to this groupId.
+     * This is done by checking if any processed files from this group exist in segmented folders.
+     */
+    private String findProjectNameForGroup(String groupId) throws IOException {
+        if (!Files.exists(segmentedPath)) return null;
+        
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(segmentedPath)) {
+            for (Path projectDir : stream) {
+                if (!Files.isDirectory(projectDir)) continue;
+                
+                // Check if this project folder has any mask files
+                // We'll try to match by checking if any files exist
+                try (DirectoryStream<Path> maskStream = Files.newDirectoryStream(projectDir, "*.png")) {
+                    if (maskStream.iterator().hasNext()) {
+                        // Found a project with masks, return its name
+                        return projectDir.getFileName().toString();
+                    }
+                }
+            }
+        }
+        
+        return null;
     }
 
     public String addGroup(String groupName) {
@@ -48,16 +237,46 @@ public class FileService {
         try {
             Path groupUploadDir = storagePath.resolve(groupId);
             Path groupProcessedDir = processedPath.resolve(groupId);
+            // Use the actual project name for the segmented folder
+            Path groupSegmentedDir = segmentedPath.resolve(groupName);
             Files.createDirectories(groupUploadDir);
             Files.createDirectories(groupProcessedDir);
+            Files.createDirectories(groupSegmentedDir);
 
             newGroup.setUploadDirPath(groupUploadDir);
             newGroup.setProcessedDirPath(groupProcessedDir);
+            newGroup.setSegmentedDirPath(groupSegmentedDir);
+            
+            // Save project metadata to disk for persistence across restarts
+            saveProjectMetadata(groupId, groupName);
         } catch (Exception e) {
             throw new RuntimeException("Could not create upload directories", e);
         }
         fileGroups.put(groupId, newGroup);
         return groupId;
+    }
+    
+    /**
+     * Saves project metadata (groupId -> projectName mapping) to disk
+     */
+    private void saveProjectMetadata(String groupId, String projectName) throws IOException {
+        Path metadataFile = storagePath.resolve(groupId).resolve(".metadata");
+        Files.writeString(metadataFile, projectName, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    }
+    
+    /**
+     * Loads project name from metadata file
+     */
+    private String loadProjectMetadata(String groupId) {
+        try {
+            Path metadataFile = storagePath.resolve(groupId).resolve(".metadata");
+            if (Files.exists(metadataFile)) {
+                return Files.readString(metadataFile).trim();
+            }
+        } catch (IOException e) {
+            System.err.println("⚠️ Error reading metadata for group " + groupId + ": " + e.getMessage());
+        }
+        return null;
     }
 
     public void addFile(String groupId, MultipartFile file) throws IOException {
@@ -95,6 +314,29 @@ public class FileService {
         }
     }
 
+    public int getFileCount(String groupId) {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) {
+            return 0;
+        }
+        return group.getFilesCount();
+    }
+
+    // Helper method to save final mask to segmented folder
+    private void saveFinalMask(FileGroup group, int fileIndex, byte[] maskData, String originalFilePath) throws IOException {
+        if (group.getSegmentedDirPath() == null) return;
+        
+        String fileName = Paths.get(originalFilePath).getFileName().toString();
+        String baseName = FilenameUtils.removeExtension(fileName);
+        String segmentedFileName = baseName + "_mask.png";
+        Path segmentedFile = group.getSegmentedDirPath().resolve(segmentedFileName);
+        
+        Files.write(segmentedFile, maskData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        group.addSegmentedFile(fileIndex, segmentedFile.toString());
+        
+        System.out.println("✅ Final mask saved to segmented folder: " + segmentedFile);
+    }
+
     public boolean processImage(String groupId, int fileIndex) throws IOException {
         FileGroup group = fileGroups.get(groupId);
         if (group == null) return false;
@@ -126,6 +368,10 @@ public class FileService {
             Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
             group.addProcessedFile(fileIndex, processedFile.toString());
+            
+            // Save final mask to segmented folder
+            saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+            
             return true;
         }
         return false;
@@ -202,14 +448,27 @@ public class FileService {
 
     public boolean deleteGroup(String groupId) {
         try {
+            FileGroup group = fileGroups.get(groupId);
+            
+            // Delete uploads folder (organized by groupId)
             FileSystemUtils.deleteRecursively(storagePath.resolve(groupId));
+            
+            // Delete processed folder (organized by groupId)
             FileSystemUtils.deleteRecursively(processedPath.resolve(groupId));
+            
+            // Delete segmented folder (organized by project name)
+            if (group != null && group.getSegmentedDirPath() != null) {
+                FileSystemUtils.deleteRecursively(group.getSegmentedDirPath());
+                System.out.println("✅ Deleted segmented folder: " + group.getSegmentedDirPath());
+            }
+            
+            fileGroups.remove(groupId);
+            System.out.println("✅ Successfully deleted all folders for group: " + groupId);
+            return true;
         } catch (IOException e) {
+            System.err.println("❌ Error deleting group folders: " + e.getMessage());
             return false;
         }
-
-        fileGroups.remove(groupId);
-        return true;
     }
 
     public boolean deleteFile(String groupId, int fileIndex) {
@@ -281,6 +540,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -331,6 +594,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             } else {
                 System.out.println("Segment union: échec, statut HTTP: " + response.getStatusCode());
@@ -382,6 +649,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -424,6 +695,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -525,6 +800,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -638,6 +917,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -694,6 +977,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -750,6 +1037,10 @@ public class FileService {
                 Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
 
                 group.addProcessedFile(fileIndex, processedFile.toString());
+                
+                // Save final mask to segmented folder
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -764,8 +1055,10 @@ public class FileService {
         @Getter String groupName;
         private final Map<Integer, String> originalFiles = new HashMap<>();
         private final Map<Integer, String> processedFiles = new HashMap<>();
+        private final Map<Integer, String> segmentedFiles = new HashMap<>();
         @Getter @Setter private Path uploadDirPath;
         @Getter @Setter private Path processedDirPath;
+        @Getter @Setter private Path segmentedDirPath;
 
         public FileGroup(String groupName) {
             this.groupName = groupName;
@@ -789,6 +1082,14 @@ public class FileService {
 
         public void addProcessedFile(int index, String filePath) {
             processedFiles.put(index, filePath);
+        }
+
+        public String getSegmentedFilePath(int index) {
+            return segmentedFiles.get(index);
+        }
+
+        public void addSegmentedFile(int index, String filePath) {
+            segmentedFiles.put(index, filePath);
         }
     }
 }
