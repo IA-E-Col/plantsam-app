@@ -438,12 +438,21 @@ async def segment_union(
         point_coords = np.array([[x, y]])
         point_labels = np.array([1])
 
+        # Prepare mask_input if we have an existing mask
+        mask_input = None
+        if image_key in union_masks_storage:
+            previous_mask = union_masks_storage[image_key]
+            # SAM2 expects mask_input in shape (1, H, W) with float values
+            mask_input = previous_mask[np.newaxis, :, :].astype(np.float32)
+            print(f"✅ Using previous mask as input (shape: {mask_input.shape}, non-zero: {np.count_nonzero(previous_mask)})")
+
         print(f"⏳ Running SAM2 prediction...")
         with torch.no_grad():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 masks, scores, _ = predictor.predict(
                     point_coords=point_coords,
                     point_labels=point_labels,
+                    mask_input=mask_input,
                     box=None,
                     multimask_output=True
                 )
@@ -451,6 +460,13 @@ async def segment_union(
                 current_mask = masks[best_mask_index].astype(np.uint8)
         
         print(f"✅ SAM2 prediction completed successfully")
+        print(f"Current mask shape: {current_mask.shape}")
+        
+        # Ensure mask dimensions match the original image
+        if current_mask.shape != (image_bgr.shape[0], image_bgr.shape[1]):
+            print(f"⚠️ Mask shape mismatch! Resizing from {current_mask.shape} to {(image_bgr.shape[0], image_bgr.shape[1])}")
+            current_mask = cv2.resize(current_mask, (image_bgr.shape[1], image_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+            print(f"✅ Mask resized to match image dimensions")
         
         # Clear CUDA cache to prevent memory buildup
         torch.cuda.empty_cache()
@@ -458,6 +474,7 @@ async def segment_union(
         if point_count == 1:
             if image_key in union_masks_storage:
                 previous_mask = union_masks_storage[image_key]
+                print(f"Previous mask shape: {previous_mask.shape}, Current mask shape: {current_mask.shape}")
                 union_mask = np.logical_or(previous_mask, current_mask).astype(np.uint8)
                 union_masks_storage[image_key] = union_mask
             else:
@@ -465,6 +482,7 @@ async def segment_union(
         else:
             if image_key in union_masks_storage:
                 previous_mask = union_masks_storage[image_key]
+                print(f"Previous mask shape: {previous_mask.shape}, Current mask shape: {current_mask.shape}")
                 union_mask = np.logical_or(previous_mask, current_mask).astype(np.uint8)
                 union_masks_storage[image_key] = union_mask
             else:
