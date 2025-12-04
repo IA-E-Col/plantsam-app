@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import './CorrectionPage.css'
 
 // Modifier l'interface Point pour inclure les coordonnées relatives
@@ -25,6 +25,7 @@ interface Rectangle {
 interface SegmentationStep {
     id: number;
     imageUrl: string;
+    blob: Blob;  // Store the actual blob data for algorithm operations
     stepName: string;
     timestamp: Date;
 }
@@ -74,11 +75,88 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [processedImages, setProcessedImages] = useState<Set<number>>(new Set());
+    const imagesListRef = useRef<HTMLDivElement>(null);
+    const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 }); // Show first 50 by default
 
 
     const currentImage = imagesList[currentImageIndex]
     // Get the backend file index for the current frontend image
     const currentBackendIndex = backendIndices[currentImageIndex]
+
+    // Store thumbnail URLs in a ref to prevent recreation and revocation issues
+    const thumbnailUrlsRef = useRef<string[]>([]);
+    
+    // Create thumbnail URLs only when imagesList changes
+    useEffect(() => {
+        // Revoke old URLs
+        thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+        
+        // Create new URLs
+        thumbnailUrlsRef.current = imagesList.map(image => URL.createObjectURL(image));
+        
+        // Force re-render to show new thumbnails
+        setVisibleRange(prev => ({ ...prev }));
+    }, [imagesList]);
+
+    // Cleanup on unmount only
+    useEffect(() => {
+        return () => {
+            thumbnailUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+        };
+    }, []);
+
+    // Virtual scrolling: update visible range based on scroll position
+    useEffect(() => {
+        const handleScroll = () => {
+            if (!imagesListRef.current) return;
+            
+            const container = imagesListRef.current;
+            const scrollTop = container.scrollTop;
+            const containerHeight = container.clientHeight;
+            const itemHeight = 130; // Approximate height of each thumbnail item (110px + gap)
+            
+            // Calculate visible range with buffer
+            const buffer = 15; // Render 15 extra items above and below
+            const start = Math.max(0, Math.floor(scrollTop / itemHeight) - buffer);
+            const visibleCount = Math.ceil(containerHeight / itemHeight);
+            const end = Math.min(imagesList.length, start + visibleCount + (buffer * 2));
+            
+            setVisibleRange({ start, end });
+        };
+
+        const container = imagesListRef.current;
+        if (container) {
+            container.addEventListener('scroll', handleScroll, { passive: true });
+            // Initial calculation after a short delay to ensure container is rendered
+            setTimeout(handleScroll, 0);
+        }
+
+        return () => {
+            if (container) {
+                container.removeEventListener('scroll', handleScroll);
+            }
+        };
+    }, [imagesList.length]);
+
+    // Auto-scroll to current image when it changes
+    useEffect(() => {
+        if (!imagesListRef.current) return;
+        
+        // Ensure current image is in visible range
+        if (currentImageIndex < visibleRange.start || currentImageIndex >= visibleRange.end) {
+            const buffer = 10;
+            const start = Math.max(0, currentImageIndex - buffer);
+            const end = Math.min(imagesList.length, currentImageIndex + buffer + 1);
+            setVisibleRange({ start, end });
+        }
+        
+        // Scroll to current image
+        const container = imagesListRef.current;
+        const itemHeight = 130;
+        const scrollTop = currentImageIndex * itemHeight;
+        container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+    }, [currentImageIndex, imagesList.length]);
 
     let imageLoadLogCount = 0;
 
@@ -172,6 +250,26 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         }
     }, [groupId, currentBackendIndex]);
 
+    // Fetch processed images status from backend
+    const loadProcessedIndices = useCallback(async () => {
+        if (!groupId) return;
+        try {
+            const response = await fetch(`/api/files/group/${groupId}/processed`);
+            if (response.ok) {
+                const data = await response.json();
+                setProcessedImages(new Set(data.processed));
+            }
+        } catch (error) {
+            console.error('Error loading processed indices:', error);
+        }
+    }, [groupId]);
+
+    // Mark current image as processed locally and on backend
+    const markCurrentImageAsProcessed = useCallback(() => {
+        const backendIdx = currentBackendIndex;
+        setProcessedImages(prev => new Set(prev).add(backendIdx));
+    }, [currentBackendIndex]);
+
     // Effet d'initialisation PRINCIPAL - UN SEUL
     useEffect(() => {
         if (!groupId || images.length === 0) return;
@@ -179,6 +277,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         let isMounted = true;
 
         const initializePage = async () => {
+            // Load processed indices
+            await loadProcessedIndices();
+
             // Essayer d'abord de charger un résultat existant sans reset
             const hasExisting = await tryLoadExistingProcessed();
 
@@ -231,7 +332,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         return () => {
             isMounted = false;
         };
-    }, [groupId, currentBackendIndex]);
+    }, [groupId, currentBackendIndex, loadProcessedIndices, tryLoadExistingProcessed]);
 
     // Debug: surveiller les changements de l'URL traitée
     useEffect(() => {
@@ -333,27 +434,12 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         }
     };
 
+    // Note: We no longer save step images to the backend (only final masks are persisted)
+    // This function is kept for backward compatibility but does nothing
     const saveStepImage = async (imageBlob: Blob, stepName: string) => {
-        if (!groupId) return false;
-
-        try {
-            const imageBuffer = await imageBlob.arrayBuffer();
-            const response = await fetch(
-                `/api/files/group/${groupId}/${currentBackendIndex}/save_step?stepName=${encodeURIComponent(stepName)}`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/octet-stream',
-                    },
-                    body: imageBuffer
-                }
-            );
-
-            return response.ok;
-        } catch (error) {
-            console.error('Erreur lors de la sauvegarde de l\'étape:', error);
-            return false;
-        }
+        // Step images are now only kept in memory for UI history
+        // Final masks are automatically saved by the backend on each operation
+        return true;
     };
 
     const applyFullSegmentation = async () => {
@@ -387,12 +473,16 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 const newStep: SegmentationStep = {
                     id: stepIdCounter.current++,
                     imageUrl: stepUrl,
+                    blob: resultBlob,
                     stepName: stepName,
                     timestamp: new Date()
                 };
                 setSegmentationSteps(prev => [...prev, newStep]);
 
                 setPoints([]);
+
+                // Mark image as processed
+                markCurrentImageAsProcessed();
 
                 // Forcer un re-rendu
                 setCurrentImageIndex(prev => prev);
@@ -466,20 +556,22 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         const files = e.target.files;
         if (!files || files.length === 0) return;
 
-        const newImage = files[0];
-        
-        // Validate it's an image
-        if (!newImage.type.startsWith('image/')) {
-            alert('Please select a valid image file');
+        // Validate all files are images
+        const newImages = Array.from(files);
+        const invalidFiles = newImages.filter(file => !file.type.startsWith('image/'));
+        if (invalidFiles.length > 0) {
+            alert('Please select only valid image files');
             return;
         }
 
         try {
             setIsLoading(true);
             
-            // Upload the new image to the backend using the existing upload endpoint
+            // Upload all new images to the backend using the existing upload endpoint
             const formData = new FormData();
-            formData.append('files', newImage);
+            newImages.forEach(image => {
+                formData.append('files', image);
+            });
             
             const response = await fetch(`/api/files/group/${groupId}/upload`, {
                 method: 'POST',
@@ -487,18 +579,19 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             });
 
             if (!response.ok) {
-                throw new Error('Failed to upload image');
+                throw new Error('Failed to upload images');
             }
 
-            // Add to local images list
-            setImagesList(prev => [...prev, newImage]);
+            // Add all images to local images list
+            setImagesList(prev => [...prev, ...newImages]);
             
-            // Track the backend index for this new image
+            // Track the backend indices for all new images
             // The backend assigns sequential indices based on total uploads
-            const newBackendIndex = backendIndices.length > 0 ? Math.max(...backendIndices) + 1 : imagesList.length;
-            setBackendIndices(prev => [...prev, newBackendIndex]);
+            const startingBackendIndex = backendIndices.length > 0 ? Math.max(...backendIndices) + 1 : imagesList.length;
+            const newBackendIndices = newImages.map((_, i) => startingBackendIndex + i);
+            setBackendIndices(prev => [...prev, ...newBackendIndices]);
             
-            // Reset the page state for the new image
+            // Reset the page state for the first new image
             setPoints([]);
             setRectangles([]);
             setSelectedStepId(null);
@@ -512,14 +605,14 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 setInitialSegmentationUrl('');
             }
             
-            // Switch to the new image (it will be at the end of the list)
+            // Switch to the first new image (it will be at the end of the list)
             const newIndex = imagesList.length;
             setCurrentImageIndex(newIndex);
             
-            console.log('New image added successfully with backend index:', newBackendIndex);
+            console.log(`${newImages.length} new image(s) added successfully starting at backend index:`, startingBackendIndex);
         } catch (error) {
-            console.error('Error adding image:', error);
-            alert(`Error adding image: ${error instanceof Error ? error.message : String(error)}`);
+            console.error('Error adding images:', error);
+            alert(`Error adding images: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             setIsLoading(false);
             // Reset the input
@@ -1034,6 +1127,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             const newStep: SegmentationStep = {
                 id: stepIdCounter.current++,
                 imageUrl: stepUrl,
+                blob: blob,
                 stepName: stepName,
                 timestamp: new Date()
             };
@@ -1044,6 +1138,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             }
             const url = URL.createObjectURL(blob);
             setProcessedImageUrl(url);
+
+            // Mark image as processed
+            markCurrentImageAsProcessed();
 
             console.log('Rectangle applied successfully');
         } catch (error) {
@@ -1130,6 +1227,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 const newStep: SegmentationStep = {
                     id: stepIdCounter.current++,
                     imageUrl: stepUrl,
+                    blob: blob,
                     stepName: stepName,
                     timestamp: new Date()
                 };
@@ -1140,6 +1238,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 }
                 const newUrl = URL.createObjectURL(blob);
                 setProcessedImageUrl(newUrl);
+
+                // Mark image as processed
+                markCurrentImageAsProcessed();
 
                 console.log('Point applied successfully');
             }
@@ -1174,26 +1275,27 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         try {
             console.log('Applying algorithm:', algoType);
 
+            // Get the previous mask to use for the algorithm
             let previousMaskBlob: Blob;
             
             if (selectedStepId) {
-                const step = segmentationSteps.find(step => step.id === selectedStepId);
-                if (!step) throw new Error("Selected step not found");
-                const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/step/${step.stepName}`);
-                if (!response.ok) throw new Error("Failed to fetch selected step mask");
-                previousMaskBlob = await response.blob();
-            } else if (segmentationSteps.length > 0) {
-                // Get the last step's mask from the backend
-                const lastStep = segmentationSteps[segmentationSteps.length - 1];
-                const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/step/${lastStep.stepName}`);
-                if (!response.ok) throw new Error("Failed to fetch previous step mask");
-                previousMaskBlob = await response.blob();
+                // User selected a specific step - use that step's stored blob as the previous mask
+                const step = segmentationSteps.find(s => s.id === selectedStepId);
+                if (!step) {
+                    throw new Error("Selected step not found");
+                }
+                // Use the stored blob directly (no fetch needed)
+                previousMaskBlob = step.blob;
+                console.log('Using selected step as previous mask:', step.stepName);
             } else {
-                throw new Error("No previous mask available");
+                // No step selected - use the current result from the backend (most recent final mask)
+                const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`);
+                if (!response.ok) {
+                    throw new Error("No previous mask available - please perform segmentation first");
+                }
+                previousMaskBlob = await response.blob();
+                console.log('Using current backend result as previous mask');
             }
-
-            const formData = new FormData();
-            formData.append('previousMask', previousMaskBlob);
 
             let endpoint: string;
             if (algoType === 'union') {
@@ -1206,20 +1308,26 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 throw new Error(`Unknown algorithm type: ${algoType}`);
             }
 
-            const response = await fetch(
+            // Convert blob to array buffer to send as raw bytes
+            const arrayBuffer = await previousMaskBlob.arrayBuffer();
+
+            const algorithmResponse = await fetch(
                 `/api/files/group/${groupId}/${currentBackendIndex}/${endpoint}`,
                 {
                     method: 'POST',
-                    body: previousMaskBlob
+                    headers: {
+                        'Content-Type': 'application/octet-stream'
+                    },
+                    body: arrayBuffer
                 }
             );
 
-            if (!response.ok) {
-                throw new Error(`Error applying ${algoType}: ${response.statusText}`);
+            if (!algorithmResponse.ok) {
+                throw new Error(`Error applying ${algoType}: ${algorithmResponse.statusText}`);
             }
 
             // Update the processed image with the result
-            const blob = await response.blob();
+            const blob = await algorithmResponse.blob();
             if (processedImageUrl) {
                 URL.revokeObjectURL(processedImageUrl);
             }
@@ -1228,17 +1336,19 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             setPoints([]);
             setProcessedImageUrl(url);
 
-            // Save the step and add it to segmentation steps
-            const stepName = `${algoType}_operation`;
-            await saveStepImage(blob, stepName);
+            // Add result to segmentation steps (for visual history)
             const stepUrl = URL.createObjectURL(blob);
             const newStep: SegmentationStep = {
                 id: stepIdCounter.current++,
                 imageUrl: stepUrl,
-                stepName: stepName,
+                blob: blob,
+                stepName: `${algoType}_operation`,
                 timestamp: new Date()
             };
             setSegmentationSteps(prev => [...prev, newStep]);
+
+            // Mark image as processed
+            markCurrentImageAsProcessed();
 
             // Reset algorithm type to 'union' so subsequent point placements work correctly
             setAlgoType('union');
@@ -1281,35 +1391,54 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             <div className="correction-layout">
                 <div className="images-sidebar">
                     <h3>Images ({imagesList.length})</h3>
-                    <div className="images-list">
-                        {imagesList.map((image, index) => (
-                            <div
-                                key={index}
-                                className={`image-item ${index === currentImageIndex ? 'active' : ''}`}
-                                onClick={() => setCurrentImageIndex(index)}
-                            >
-                                <img
-                                    src={URL.createObjectURL(image)}
-                                    alt={`Thumbnail ${index}`}
-                                    className="thumbnail"
-                                />
-                                {index === currentImageIndex && (
-                                    <div className="active-indicator"></div>
-                                )}
-                                <button
-                                    className="delete-image-button"
-                                    onClick={(e) => handleDeleteImage(index, e)}
-                                    title="Delete image"
-                                >
-                                </button>
-                            </div>
-                        ))}
+                    <div className="images-list" ref={imagesListRef}>
+                        {/* Virtual scrolling: only render visible items */}
+                        <div style={{ height: `${imagesList.length * 130}px`, position: 'relative', padding: '0.5rem' }}>
+                            {imagesList.slice(visibleRange.start, visibleRange.end).map((image, sliceIndex) => {
+                                const index = visibleRange.start + sliceIndex;
+                                const thumbnailUrl = thumbnailUrlsRef.current[index];
+                                return (
+                                    <div
+                                        key={index}
+                                        className={`image-item ${index === currentImageIndex ? 'active' : ''}`}
+                                        onClick={() => setCurrentImageIndex(index)}
+                                        style={{
+                                            position: 'absolute',
+                                            top: `${index * 130}px`,
+                                            left: '0.5rem',
+                                            right: '0.5rem',
+                                            height: '120px'
+                                        }}
+                                    >
+                                        <img
+                                            src={thumbnailUrl}
+                                            alt={`Thumbnail ${index}`}
+                                            className="thumbnail"
+                                            loading="lazy"
+                                        />
+                                        {index === currentImageIndex && (
+                                            <div className="active-indicator"></div>
+                                        )}
+                                        {processedImages.has(backendIndices[index]) && (
+                                            <div className="processed-checkmark">✓</div>
+                                        )}
+                                        <button
+                                            className="delete-image-button"
+                                            onClick={(e) => handleDeleteImage(index, e)}
+                                            title="Delete image"
+                                        >
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                     <input
                         type="file"
                         ref={fileInputRef}
                         style={{ display: 'none' }}
                         accept="image/*"
+                        multiple
                         onChange={handleFileSelect}
                     />
                     <button className="add-image-button" onClick={handleAddImageClick}>

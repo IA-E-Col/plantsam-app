@@ -151,6 +151,20 @@ public class FileController {
         }
     }
 
+    @GetMapping("/group/{groupId}/processed")
+    public ResponseEntity<String> getProcessedIndices(@PathVariable("groupId") String groupId) {
+        try {
+            java.util.Set<Integer> processedIndices = fileService.getProcessedIndices(groupId);
+            String indicesJson = processedIndices.stream()
+                    .map(String::valueOf)
+                    .reduce((a, b) -> a + "," + b)
+                    .orElse("");
+            return ResponseEntity.ok("{\"processed\": [" + indicesJson + "]}");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("{\"error\": \"" + e.getMessage() + "\"}");
+        }
+    }
+
     @DeleteMapping("/group/{groupId}/delete")
     public ResponseEntity<String> deleteGroup(@PathVariable("groupId") String groupId) {
         try {
@@ -217,45 +231,6 @@ public class FileController {
                 }
             }
             return ResponseEntity.badRequest().body(null);
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body(null);
-        }
-    }
-
-    @PostMapping("/group/{groupId}/{fileId}/save_negative_point")
-    public ResponseEntity<String> saveNegativePointResult(@PathVariable("groupId") String groupId,
-                                                          @PathVariable("fileId") int fileId,
-                                                          @RequestBody byte[] imageData) throws IOException {
-        if (fileService.saveNegativePointResult(groupId, fileId, imageData)) {
-            return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"negative point result saved\"}");
-        }
-        return ResponseEntity.badRequest().body("Error saving negative point result");
-    }
-
-    @PostMapping("/group/{groupId}/{fileId}/save_step")
-    public ResponseEntity<String> saveStepImage(@PathVariable("groupId") String groupId,
-                                                @PathVariable("fileId") int fileId,
-                                                @RequestParam("stepName") String stepName,
-                                                @RequestBody byte[] imageData) throws IOException {
-        if (fileService.saveStepImage(groupId, fileId, imageData, stepName)) {
-            return ResponseEntity.ok("{\"status\": \"success\", \"message\": \"step image saved\"}");
-        }
-        return ResponseEntity.badRequest().body("Error saving step image");
-    }
-
-    @GetMapping("/group/{groupId}/{fileId}/step/{stepName}")
-    public ResponseEntity<byte[]> getStepImage(@PathVariable("groupId") String groupId,
-                                               @PathVariable("fileId") int fileId,
-                                               @PathVariable("stepName") String stepName) {
-        try {
-            byte[] fileData = fileService.getStepImage(groupId, fileId, stepName);
-            if (fileData == null) {
-                return ResponseEntity.notFound().build();
-            }
-
-            return ResponseEntity.ok()
-                    .header("Content-Type", "application/octet-stream")
-                    .body(fileData);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(null);
         }

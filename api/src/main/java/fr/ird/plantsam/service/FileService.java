@@ -5,6 +5,8 @@ import lombok.Setter;
 import org.apache.commons.io.FileUtils;
 import org.springframework.http.*;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClientException;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.core.io.FileSystemResource;
 import org.apache.commons.io.FilenameUtils;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,74 +26,87 @@ import java.util.*;
 public class FileService {
 
     private Map<String, FileGroup> fileGroups;
-    private Path storagePath = Paths.get("uploads");
-    private Path processedPath =  Paths.get("processed");
-    private Path segmentedPath = Paths.get("segmented");
+    private Path projectsBasePath = Paths.get("projects");
+    private RestTemplate restTemplate;
 
     public FileService(
-            @Value("${file.upload-dir:uploads}") String uploadDir,
-            @Value("${file.processed-dir:processed}") String processedDir,
-            @Value("${file.segmented-dir:segmented}") String segmentedDir) {
-        this.storagePath = Paths.get(uploadDir).toAbsolutePath().normalize();
-        this.processedPath = Paths.get(processedDir).toAbsolutePath().normalize();
-        this.segmentedPath = Paths.get(segmentedDir).toAbsolutePath().normalize();
+            @Value("${file.projects-dir:projects}") String projectsDir) {
+        this.projectsBasePath = Paths.get(projectsDir).toAbsolutePath().normalize();
         fileGroups = new HashMap<>();
+        
+        // Configure RestTemplate with timeouts
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(10000); // 10 seconds connection timeout
+        factory.setReadTimeout(120000);   // 120 seconds read timeout (for large images)
+        this.restTemplate = new RestTemplate(factory);
 
         try {
-            Files.createDirectories(storagePath);
-            Files.createDirectories(processedPath);
-            Files.createDirectories(segmentedPath);
+            Files.createDirectories(projectsBasePath);
             
             // Reconstruct fileGroups from existing disk folders
             reconstructFileGroupsFromDisk();
         } catch (IOException e) {
-            throw new RuntimeException("Could not create upload directories", e);
+            throw new RuntimeException("Could not create projects directory", e);
         }
     }
     
     /**
      * Reconstructs the fileGroups HashMap from existing folders on disk.
      * This is called on service initialization to restore projects after server restart.
+     * New structure: projects/{projectName}/originals/ and projects/{projectName}/segmented/
      */
     private void reconstructFileGroupsFromDisk() throws IOException {
         System.out.println("🔄 Reconstructing file groups from disk...");
         
-        // Scan uploads directory for group folders
-        if (!Files.exists(storagePath)) {
-            System.out.println("⚠️ No uploads directory found, skipping reconstruction");
+        // Scan projects directory for project folders
+        if (!Files.exists(projectsBasePath)) {
+            System.out.println("⚠️ No projects directory found, skipping reconstruction");
             return;
         }
         
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(storagePath)) {
-            for (Path groupDir : stream) {
-                if (!Files.isDirectory(groupDir)) continue;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(projectsBasePath)) {
+            for (Path projectDir : stream) {
+                if (!Files.isDirectory(projectDir)) continue;
                 
-                String groupId = groupDir.getFileName().toString();
+                String projectName = projectDir.getFileName().toString();
                 
-                // Find corresponding processed and segmented directories
-                Path processedDir = processedPath.resolve(groupId);
+                // Load metadata to get groupId
+                String groupId = loadGroupIdFromMetadata(projectDir);
+                if (groupId == null) {
+                    System.out.println("⚠️ Skipping project without metadata: " + projectName);
+                    continue;
+                }
                 
-                // Get files from the upload directory
-                List<Path> uploadedFiles = new ArrayList<>();
-                try (DirectoryStream<Path> fileStream = Files.newDirectoryStream(groupDir)) {
+                // Get originals and segmented directories
+                Path originalsDir = projectDir.resolve("originals");
+                Path segmentedDir = projectDir.resolve("segmented");
+                
+                if (!Files.exists(originalsDir)) {
+                    System.out.println("⚠️ Skipping project without originals folder: " + projectName);
+                    continue;
+                }
+                
+                // Get files from the originals directory
+                List<Path> originalFiles = new ArrayList<>();
+                try (DirectoryStream<Path> fileStream = Files.newDirectoryStream(originalsDir)) {
                     for (Path file : fileStream) {
                         if (Files.isRegularFile(file)) {
                             // Skip metadata files
                             String fileName = file.getFileName().toString();
                             if (!fileName.startsWith(".")) {
-                                uploadedFiles.add(file);
+                                originalFiles.add(file);
                             }
                         }
                     }
                 }
                 
-                if (uploadedFiles.isEmpty()) {
-                    System.out.println("⚠️ Skipping empty group: " + groupId);
+                if (originalFiles.isEmpty()) {
+                    System.out.println("⚠️ Skipping empty project: " + projectName);
                     continue;
                 }
                 
                 // Sort files by their index suffix (e.g., image_0.png, image_1.png)
-                uploadedFiles.sort((a, b) -> {
+                originalFiles.sort((a, b) -> {
                     String nameA = a.getFileName().toString();
                     String nameB = b.getFileName().toString();
                     
@@ -102,37 +117,25 @@ public class FileService {
                     return Integer.compare(indexA, indexB);
                 });
                 
-                // Determine project name from metadata file or segmented folders
-                String projectName = loadProjectMetadata(groupId);
-                if (projectName == null) {
-                    projectName = findProjectNameForGroup(groupId);
-                }
-                if (projectName == null) {
-                    // Fallback: use groupId as project name if no metadata or segmented folder found
-                    projectName = "project_" + groupId.substring(0, 8);
-                }
-                
-                Path segmentedDir = segmentedPath.resolve(projectName);
-                
                 // Create FileGroup
                 FileGroup fileGroup = new FileGroup(projectName);
-                fileGroup.setUploadDirPath(groupDir);
-                fileGroup.setProcessedDirPath(processedDir);
+                fileGroup.setProjectDirPath(projectDir);
+                fileGroup.setOriginalsDirPath(originalsDir);
                 fileGroup.setSegmentedDirPath(segmentedDir);
                 
+                // Load processed indices
+                Set<Integer> processedIndices = loadProcessedIndices(projectDir);
+                for (Integer idx : processedIndices) {
+                    fileGroup.markAsProcessed(idx);
+                }
+                
                 // Add all files to the group
-                for (int i = 0; i < uploadedFiles.size(); i++) {
-                    Path file = uploadedFiles.get(i);
+                for (int i = 0; i < originalFiles.size(); i++) {
+                    Path file = originalFiles.get(i);
                     fileGroup.addOriginalFile(i, file.toString());
                     
-                    // Check if any processed file exists with various possible prefixes
-                    String originalFileName = file.getFileName().toString();
-                    Path processedFile = findProcessedFile(processedDir, originalFileName);
-                    if (processedFile != null) {
-                        fileGroup.addProcessedFile(i, processedFile.toString());
-                    }
-                    
                     // Check if segmented file exists
+                    String originalFileName = file.getFileName().toString();
                     String baseName = FilenameUtils.removeExtension(originalFileName);
                     String segmentedFileName = baseName + "_mask.png";
                     Path segmentedFile = segmentedDir.resolve(segmentedFileName);
@@ -142,53 +145,14 @@ public class FileService {
                 }
                 
                 fileGroups.put(groupId, fileGroup);
-                System.out.println("✅ Reconstructed group: " + groupId + " (" + projectName + ") with " + uploadedFiles.size() + " files");
+                System.out.println("✅ Reconstructed project: " + projectName + " (" + groupId + ") with " + originalFiles.size() + " files");
             }
         }
         
-        System.out.println("✅ Reconstruction complete. Total groups: " + fileGroups.size());
+        System.out.println("✅ Reconstruction complete. Total projects: " + fileGroups.size());
     }
     
-    /**
-     * Finds a processed file that corresponds to the original filename.
-     * Checks various possible prefixes used during processing.
-     */
-    private Path findProcessedFile(Path processedDir, String originalFileName) throws IOException {
-        if (!Files.exists(processedDir)) return null;
-        
-        // Common prefixes used during image processing
-        String[] prefixes = {
-            "processed_",
-            "cleared_points_",
-            "cleared_rectangles_",
-            "segmented_with_points_",
-            "union_segmented_",
-            "intersection_segmented_",
-            "negative_point_",
-            "positive_",
-            "negative_"
-        };
-        
-        // Try each prefix
-        for (String prefix : prefixes) {
-            Path candidateFile = processedDir.resolve(prefix + originalFileName);
-            if (Files.exists(candidateFile)) {
-                return candidateFile;
-            }
-        }
-        
-        // Also check for files that end with the original filename (for step files)
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(processedDir)) {
-            for (Path file : stream) {
-                String fileName = file.getFileName().toString();
-                if (fileName.endsWith(originalFileName)) {
-                    return file;
-                }
-            }
-        }
-        
-        return null;
-    }
+
     
     /**
      * Extracts the file index from a filename with format: basename_index.ext
@@ -206,75 +170,96 @@ public class FileService {
         return 0;
     }
     
-    /**
-     * Finds the project name by checking which segmented folder corresponds to this groupId.
-     * This is done by checking if any processed files from this group exist in segmented folders.
-     */
-    private String findProjectNameForGroup(String groupId) throws IOException {
-        if (!Files.exists(segmentedPath)) return null;
-        
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(segmentedPath)) {
-            for (Path projectDir : stream) {
-                if (!Files.isDirectory(projectDir)) continue;
-                
-                // Check if this project folder has any mask files
-                // We'll try to match by checking if any files exist
-                try (DirectoryStream<Path> maskStream = Files.newDirectoryStream(projectDir, "*.png")) {
-                    if (maskStream.iterator().hasNext()) {
-                        // Found a project with masks, return its name
-                        return projectDir.getFileName().toString();
-                    }
-                }
-            }
-        }
-        
-        return null;
-    }
+
 
     public String addGroup(String groupName) {
         String groupId = UUID.randomUUID().toString();
         FileGroup newGroup = new FileGroup(groupName);
         try {
-            Path groupUploadDir = storagePath.resolve(groupId);
-            Path groupProcessedDir = processedPath.resolve(groupId);
-            // Use the actual project name for the segmented folder
-            Path groupSegmentedDir = segmentedPath.resolve(groupName);
-            Files.createDirectories(groupUploadDir);
-            Files.createDirectories(groupProcessedDir);
-            Files.createDirectories(groupSegmentedDir);
+            // Create project directory: projects/{projectName}/
+            Path projectDir = projectsBasePath.resolve(groupName);
+            Path originalsDir = projectDir.resolve("originals");
+            Path segmentedDir = projectDir.resolve("segmented");
+            
+            Files.createDirectories(originalsDir);
+            Files.createDirectories(segmentedDir);
 
-            newGroup.setUploadDirPath(groupUploadDir);
-            newGroup.setProcessedDirPath(groupProcessedDir);
-            newGroup.setSegmentedDirPath(groupSegmentedDir);
+            newGroup.setProjectDirPath(projectDir);
+            newGroup.setOriginalsDirPath(originalsDir);
+            newGroup.setSegmentedDirPath(segmentedDir);
             
             // Save project metadata to disk for persistence across restarts
-            saveProjectMetadata(groupId, groupName);
+            saveProjectMetadata(projectDir, groupId, groupName);
         } catch (Exception e) {
-            throw new RuntimeException("Could not create upload directories", e);
+            throw new RuntimeException("Could not create project directories", e);
         }
         fileGroups.put(groupId, newGroup);
         return groupId;
     }
     
     /**
-     * Saves project metadata (groupId -> projectName mapping) to disk
+     * Saves project metadata (groupId and projectName) to disk
      */
-    private void saveProjectMetadata(String groupId, String projectName) throws IOException {
-        Path metadataFile = storagePath.resolve(groupId).resolve(".metadata");
-        Files.writeString(metadataFile, projectName, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    private void saveProjectMetadata(Path projectDir, String groupId, String projectName) throws IOException {
+        Path metadataFile = projectDir.resolve(".metadata");
+        String content = groupId + "\n" + projectName;
+        Files.writeString(metadataFile, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
     }
     
     /**
-     * Loads project name from metadata file
+     * Saves processed indices to disk for persistence
      */
-    private String loadProjectMetadata(String groupId) {
+    private void saveProcessedIndices(Path projectDir, Set<Integer> processedIndices) throws IOException {
+        Path processedFile = projectDir.resolve(".processed");
+        String content = processedIndices.stream()
+                .map(String::valueOf)
+                .reduce((a, b) -> a + "," + b)
+                .orElse("");
+        Files.writeString(processedFile, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    }
+    
+    /**
+     * Loads processed indices from disk
+     */
+    private Set<Integer> loadProcessedIndices(Path projectDir) {
         try {
-            Path metadataFile = storagePath.resolve(groupId).resolve(".metadata");
-            if (Files.exists(metadataFile)) {
-                return Files.readString(metadataFile).trim();
+            Path processedFile = projectDir.resolve(".processed");
+            if (Files.exists(processedFile)) {
+                String content = Files.readString(processedFile).trim();
+                if (!content.isEmpty()) {
+                    Set<Integer> indices = new HashSet<>();
+                    for (String index : content.split(",")) {
+                        try {
+                            indices.add(Integer.parseInt(index.trim()));
+                        } catch (NumberFormatException e) {
+                            // Skip invalid entries
+                        }
+                    }
+                    return indices;
+                }
             }
         } catch (IOException e) {
-            System.err.println("⚠️ Error reading metadata for group " + groupId + ": " + e.getMessage());
+            System.err.println("⚠️ Error reading processed indices for project " + projectDir.getFileName() + ": " + e.getMessage());
+        }
+        return new HashSet<>();
+    }
+    
+    /**
+     * Loads groupId from metadata file in project directory
+     */
+    private String loadGroupIdFromMetadata(Path projectDir) {
+        try {
+            Path metadataFile = projectDir.resolve(".metadata");
+            if (Files.exists(metadataFile)) {
+                String content = Files.readString(metadataFile).trim();
+                // First line is groupId, second line is project name
+                String[] lines = content.split("\n");
+                if (lines.length > 0) {
+                    return lines[0].trim();
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("⚠️ Error reading metadata for project " + projectDir.getFileName() + ": " + e.getMessage());
         }
         return null;
     }
@@ -293,7 +278,7 @@ public class FileService {
         int fileIndex = group.getFilesCount();
         String fileBaseName = FilenameUtils.removeExtension(originalFileName);
         String storedFileName = fileBaseName + "_" + fileIndex + fileExtension;
-        Path destinationFile = group.getUploadDirPath().resolve(storedFileName);
+        Path destinationFile = group.getOriginalsDirPath().resolve(storedFileName);
 
         file.transferTo(destinationFile.toFile());
         group.addOriginalFile(fileIndex, destinationFile.toString());
@@ -320,6 +305,26 @@ public class FileService {
             return 0;
         }
         return group.getFilesCount();
+    }
+
+    public Set<Integer> getProcessedIndices(String groupId) {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) {
+            return new HashSet<>();
+        }
+        return group.getProcessedIndices();
+    }
+
+    private void markImageAsProcessed(String groupId, int fileIndex) {
+        FileGroup group = fileGroups.get(groupId);
+        if (group != null) {
+            group.markAsProcessed(fileIndex);
+            try {
+                saveProcessedIndices(group.getProjectDirPath(), group.getProcessedIndices());
+            } catch (IOException e) {
+                System.err.println("⚠️ Error saving processed indices: " + e.getMessage());
+            }
+        }
     }
 
     // Helper method to save final mask to segmented folder
@@ -363,14 +368,11 @@ public class FileService {
         );
 
         if (response.getStatusCode() == HttpStatus.OK) {
-            String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
-            Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-            Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-            group.addProcessedFile(fileIndex, processedFile.toString());
-            
-            // Save final mask to segmented folder
+            // Save final mask to segmented folder (no intermediate storage)
             saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+            
+            // Mark image as processed
+            markImageAsProcessed(groupId, fileIndex);
             
             return true;
         }
@@ -386,8 +388,6 @@ public class FileService {
 
         System.out.println("Coordonnées reçues du frontend: x=" + x + ", y=" + y);
         System.out.println("Fichier à envoyer: " + originalFilePath);
-
-        RestTemplate restTemplate = new RestTemplate();
 
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -413,12 +413,8 @@ public class FileService {
             );
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String suffix = positive ? "positive" : "negative";
-                String processedFileName = suffix + "_processed_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
+                // Save final mask to segmented folder (no intermediate storage)
+                saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
                 return true;
             }
         } catch (Exception e) {
@@ -435,7 +431,8 @@ public class FileService {
                 return null;
             }
 
-            String filePath = group.getProcessedFilePath(fileIndex);
+            // Return the final segmented mask
+            String filePath = group.getSegmentedFilePath(fileIndex);
             if (filePath == null) {
                 return null;
             }
@@ -450,23 +447,17 @@ public class FileService {
         try {
             FileGroup group = fileGroups.get(groupId);
             
-            // Delete uploads folder (organized by groupId)
-            FileSystemUtils.deleteRecursively(storagePath.resolve(groupId));
-            
-            // Delete processed folder (organized by groupId)
-            FileSystemUtils.deleteRecursively(processedPath.resolve(groupId));
-            
-            // Delete segmented folder (organized by project name)
-            if (group != null && group.getSegmentedDirPath() != null) {
-                FileSystemUtils.deleteRecursively(group.getSegmentedDirPath());
-                System.out.println("✅ Deleted segmented folder: " + group.getSegmentedDirPath());
+            if (group != null && group.getProjectDirPath() != null) {
+                // Delete the entire project directory (contains originals and segmented subfolders)
+                FileSystemUtils.deleteRecursively(group.getProjectDirPath());
+                System.out.println("✅ Deleted project directory: " + group.getProjectDirPath());
             }
             
             fileGroups.remove(groupId);
-            System.out.println("✅ Successfully deleted all folders for group: " + groupId);
+            System.out.println("✅ Successfully deleted project: " + groupId);
             return true;
         } catch (IOException e) {
-            System.err.println("❌ Error deleting group folders: " + e.getMessage());
+            System.err.println("❌ Error deleting project: " + e.getMessage());
             return false;
         }
     }
@@ -476,28 +467,29 @@ public class FileService {
         if (group == null) {
             return false;
         }
+        
+        // Delete original file
         String originalFilePath = group.getOriginalFilePath(fileIndex);
-        if (originalFilePath == null) {
-            return false;
-        }
-        try {
-            Files.deleteIfExists(Paths.get(originalFilePath));
-        } catch (IOException e) {
-            return false;
+        if (originalFilePath != null) {
+            try {
+                Files.deleteIfExists(Paths.get(originalFilePath));
+            } catch (IOException e) {
+                return false;
+            }
         }
 
-        String processedFilePath = group.getProcessedFilePath(fileIndex);
-        if (processedFilePath == null) {
-            return false;
-        }
-        try {
-            Files.deleteIfExists(Paths.get(processedFilePath));
-        } catch (IOException e) {
-            return false;
+        // Delete segmented file if it exists
+        String segmentedFilePath = group.getSegmentedFilePath(fileIndex);
+        if (segmentedFilePath != null) {
+            try {
+                Files.deleteIfExists(Paths.get(segmentedFilePath));
+            } catch (IOException e) {
+                // Continue even if segmented file deletion fails
+            }
         }
 
         group.originalFiles.remove(fileIndex);
-        group.processedFiles.remove(fileIndex);
+        group.segmentedFiles.remove(fileIndex);
         return true;
     }
 
@@ -509,8 +501,6 @@ public class FileService {
         if (originalFilePath == null) return false;
 
         System.out.println("Segment avec points - Positifs: " + positivePoints + ", Négatifs: " + negativePoints + ", StartType: " + startType);
-
-        RestTemplate restTemplate = new RestTemplate();
 
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -535,14 +525,11 @@ public class FileService {
             );
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String processedFileName = "segmented_with_points_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
-                
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             }
@@ -561,8 +548,6 @@ public class FileService {
 
 
         System.out.println("Segment union - Point: (" + x + ", " + y + "), Count: " + pointCount + ", StartType: " + startType);
-
-        RestTemplate restTemplate = new RestTemplate();
 
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -589,22 +574,26 @@ public class FileService {
 
             if (response.getStatusCode() == HttpStatus.OK) {
                 System.out.println("Segment union: succès, image traitée sauvegardée");
-                String processedFileName = "union_segmented_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
                 
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             } else {
                 System.out.println("Segment union: échec, statut HTTP: " + response.getStatusCode());
                 return false;
             }
+        } catch (RestClientException e) {
+            System.err.println("❌ Erreur lors de l'appel à l'API Python (union): " + e.getMessage());
+            if (e.getMessage().contains("Unexpected end of file")) {
+                System.err.println("⚠️ Le serveur Python s'est arrêté de manière inattendue. Vérifiez les logs Python.");
+            }
         } catch (Exception e) {
-            System.err.println("Erreur lors de l'appel à l'API Python: " + e.getMessage());
+            System.err.println("❌ Erreur inattendue lors de segment_union: " + e.getMessage());
+            e.printStackTrace();
         }
         return false;
     }
@@ -617,8 +606,6 @@ public class FileService {
         if (originalFilePath == null) return false;
 
         System.out.println("Segment intersection - Point: (" + x + ", " + y + "), Count: " + pointCount + ", StartType: " + startType);
-
-        RestTemplate restTemplate = new RestTemplate();
 
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -644,14 +631,11 @@ public class FileService {
             );
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String processedFileName = "intersection_segmented_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
-                
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             }
@@ -690,14 +674,11 @@ public class FileService {
             );
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String processedFileName = "cleared_points_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
-                
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             }
@@ -707,57 +688,7 @@ public class FileService {
         return false;
     }
 
-    public boolean saveNegativePointResult(String groupId, int fileIndex, byte[] imageData) throws IOException {
-        FileGroup group = fileGroups.get(groupId);
-        if (group == null) return false;
 
-        String originalFilePath = group.getOriginalFilePath(fileIndex);
-        if (originalFilePath == null) return false;
-
-        String processedFileName = "negative_point_" + Paths.get(originalFilePath).getFileName();
-        Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-        Files.write(processedFile, imageData, StandardOpenOption.CREATE);
-
-        group.addProcessedFile(fileIndex, processedFile.toString());
-        return true;
-    }
-
-    public boolean saveStepImage(String groupId, int fileIndex, byte[] imageData, String stepName) throws IOException {
-        FileGroup group = fileGroups.get(groupId);
-        if (group == null) return false;
-
-        String originalFilePath = group.getOriginalFilePath(fileIndex);
-        if (originalFilePath == null) return false;
-
-        String stepFileName = stepName + "_" + Paths.get(originalFilePath).getFileName();
-        Path stepFile = group.getProcessedDirPath().resolve(stepFileName);
-
-        System.out.println("Sauvegarde de l'étape: " + stepFile.toAbsolutePath());
-
-        Files.write(stepFile, imageData, StandardOpenOption.CREATE);
-        group.addProcessedFile(fileIndex, stepFile.toString());
-        return true;
-    }
-
-    public byte[] getStepImage(String groupId, int fileIndex, String stepName) {
-        try {
-            FileGroup group = fileGroups.get(groupId);
-            if (group == null) return null;
-
-            String originalFilePath = group.getOriginalFilePath(fileIndex);
-            if (originalFilePath == null) return null;
-
-            String stepFileName = stepName + "_" + Paths.get(originalFilePath).getFileName();
-            Path stepFile = group.getProcessedDirPath().resolve(stepFileName);
-
-            if (Files.exists(stepFile)) {
-                return Files.readAllBytes(stepFile);
-            }
-            return null;
-        } catch (IOException e) {
-            return null;
-        }
-    }
 
     public boolean removeRectangle(String groupId, int fileIndex, int x, int y, int width, int height, String startType) throws IOException {
         FileGroup group = fileGroups.get(groupId);
@@ -767,8 +698,6 @@ public class FileService {
         if (originalFilePath == null) return false;
 
         System.out.println("Remove rectangle - Coords: (" + x + ", " + y + "), Size: " + width + "x" + height + ", StartType: " + startType);
-
-        RestTemplate restTemplate = new RestTemplate();
 
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -795,14 +724,11 @@ public class FileService {
             );
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String processedFileName = "rectangle_removed_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
-                
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             }
@@ -827,8 +753,6 @@ public class FileService {
 
         System.out.println("Clearing rectangles for group: " + groupId + ", file: " + fileIndex);
 
-        RestTemplate restTemplate = new RestTemplate();
-
         try {
             FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -848,18 +772,8 @@ public class FileService {
 
             if (response.getStatusCode() == HttpStatus.OK) {
                 System.out.println("Rectangles cleared successfully for group: " + groupId + ", file: " + fileIndex);
-
-                // Optionnel : sauvegarder l'état après nettoyage des rectangles
-                String processedFileName = "cleared_rectangles_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-
-                // Récupérer l'image actuelle après nettoyage
-                byte[] currentImageData = getProcessedImage(groupId, fileIndex);
-                if (currentImageData != null) {
-                    Files.write(processedFile, currentImageData, StandardOpenOption.CREATE);
-                    group.addProcessedFile(fileIndex, processedFile.toString());
-                }
-
+                // Note: clearRectangles typically reverts to initial state, 
+                // so we may not want to save a new mask here
                 return true;
             } else {
                 System.out.println("Failed to clear rectangles, HTTP status: " + response.getStatusCode());
@@ -879,8 +793,6 @@ public class FileService {
         if (originalFilePath == null) return false;
 
         System.out.println("Applying union algorithm between masks");
-
-        RestTemplate restTemplate = new RestTemplate();
 
         // Create the file resource for the original image
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
@@ -912,14 +824,11 @@ public class FileService {
             Files.deleteIfExists(tempPreviousMask);
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
-                
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             }
@@ -939,8 +848,6 @@ public class FileService {
         if (originalFilePath == null) return false;
 
         System.out.println("Applying intersection algorithm between masks");
-
-        RestTemplate restTemplate = new RestTemplate();
 
         // Create the file resource for the original image
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
@@ -972,14 +879,11 @@ public class FileService {
             Files.deleteIfExists(tempPreviousMask);
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
-                
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             }
@@ -999,8 +903,6 @@ public class FileService {
         if (originalFilePath == null) return false;
 
         System.out.println("Applying IoU algorithm between masks");
-
-        RestTemplate restTemplate = new RestTemplate();
 
         // Create the file resource for the original image
         FileSystemResource fileResource = new FileSystemResource(new File(originalFilePath));
@@ -1032,14 +934,11 @@ public class FileService {
             Files.deleteIfExists(tempPreviousMask);
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                String processedFileName = "processed_" + Paths.get(originalFilePath).getFileName();
-                Path processedFile = group.getProcessedDirPath().resolve(processedFileName);
-                Files.write(processedFile, response.getBody(), StandardOpenOption.CREATE);
-
-                group.addProcessedFile(fileIndex, processedFile.toString());
-                
-                // Save final mask to segmented folder
+                // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Mark image as processed
+                markImageAsProcessed(groupId, fileIndex);
                 
                 return true;
             }
@@ -1054,10 +953,10 @@ public class FileService {
     private static class FileGroup {
         @Getter String groupName;
         private final Map<Integer, String> originalFiles = new HashMap<>();
-        private final Map<Integer, String> processedFiles = new HashMap<>();
         private final Map<Integer, String> segmentedFiles = new HashMap<>();
-        @Getter @Setter private Path uploadDirPath;
-        @Getter @Setter private Path processedDirPath;
+        private final Set<Integer> processedIndices = new HashSet<>();
+        @Getter @Setter private Path projectDirPath;
+        @Getter @Setter private Path originalsDirPath;
         @Getter @Setter private Path segmentedDirPath;
 
         public FileGroup(String groupName) {
@@ -1072,16 +971,8 @@ public class FileService {
             return originalFiles.get(index);
         }
 
-        public String getProcessedFilePath(int index) {
-            return processedFiles.get(index);
-        }
-
         public void addOriginalFile(int index, String filePath) {
             originalFiles.put(index, filePath);
-        }
-
-        public void addProcessedFile(int index, String filePath) {
-            processedFiles.put(index, filePath);
         }
 
         public String getSegmentedFilePath(int index) {
@@ -1090,6 +981,18 @@ public class FileService {
 
         public void addSegmentedFile(int index, String filePath) {
             segmentedFiles.put(index, filePath);
+        }
+
+        public void markAsProcessed(int index) {
+            processedIndices.add(index);
+        }
+
+        public boolean isProcessed(int index) {
+            return processedIndices.contains(index);
+        }
+
+        public Set<Integer> getProcessedIndices() {
+            return new HashSet<>(processedIndices);
         }
     }
 }

@@ -1,6 +1,8 @@
 # PlantSAM-App
 **Semi-Automatic Annotation Tool for Herbarium Image Segmentation**
 
+![](demo.png)
+
 ## Overview
 
 **PlantSAM-App** is an expert-guided, semi-automatic annotation tool built on top of the [PlantSAM2](https://github.com/IA-E-Col/PlantSAM) segmentation pipeline. It addresses the limitations of fully automatic segmentation by enabling experts to refine masks interactively using point prompts. This correction interface allows the transformation of unusable or incomplete segmentation masks into usable, high-quality annotations.
