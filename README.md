@@ -3,6 +3,12 @@
 
 ![](demo.png)
 
+## Citation
+
+If you use PlantSAM-App / PlantSAM / PlantSAM2 in your research, please cite:
+
+Sklab, Y., F. Castanet, H. Ariouat, S. Arib, J.-D. Zucker, E. Chenin, and E. Prifti. 2025. *PlantSAM: An object detection-driven segmentation pipeline for herbarium specimens.* Applications in Plant Sciences. e70034. [https://doi.org/10.1002/aps3.70034](https://doi.org/10.1002/aps3.70034)
+
 ## Overview
 
 **PlantSAM-App** is an expert-guided, semi-automatic annotation tool built on top of the [PlantSAM2](https://github.com/IA-E-Col/PlantSAM) segmentation pipeline. It addresses the limitations of fully automatic segmentation by enabling experts to refine masks interactively using point prompts. This correction interface allows the transformation of unusable or incomplete segmentation masks into usable, high-quality annotations.
