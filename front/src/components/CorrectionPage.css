@@ -912,7 +912,6 @@
 }
 
 .zoom-overlay {
-    /* L'overlay capture les événements de souris pendant le zoom */
 }
 
 @media (max-width: 768px) {
@@ -936,7 +935,6 @@
 .image-wrapper.zoomed {
     box-shadow: inset 0 0 0 2px #3498db;
 }
-
 
 .zoom-controls {
     position: absolute;

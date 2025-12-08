@@ -34,9 +34,6 @@ iou_masks_storage = {}
 base_masks_storage = {}
 initial_masks_storage = {}
 final_masks_storage = {}
-# Cache for predictor image encodings to avoid re-encoding large images
-current_image_key = None
-current_image_shape = None
 
 @app.get("/")
 async def root():
@@ -376,7 +373,6 @@ async def segment_union(
 
         print(f"\n=== SEGMENT UNION DEBUG ===")
         print(f"Point: ({x}, {y}), Count: {point_count}, Start type: {start_type}")
-        print(f"Image size: {image_bgr.shape}")
         print(f"Storage state:")
         print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
         print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
@@ -385,20 +381,6 @@ async def segment_union(
             print(f"- final_mask values: {np.unique(final_masks_storage[image_key])}")
         if image_key in base_masks_storage:
             print(f"- base_mask values: {np.unique(base_masks_storage[image_key])}")
-        
-        # Set image FIRST before any other operations - critical for large images
-        # Use caching to avoid re-encoding the same image multiple times
-        global current_image_key, current_image_shape
-        image_changed = (current_image_key != image_key or current_image_shape != image_bgr.shape)
-        
-        if image_changed:
-            print(f"⏳ Setting NEW image in predictor (shape: {image_bgr.shape}, this may take 10-30s for large images)...")
-            predictor.set_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
-            current_image_key = image_key
-            current_image_shape = image_bgr.shape
-            print(f"✅ Image encoded and cached successfully")
-        else:
-            print(f"✅ Using cached image encoding (no re-encoding needed)")
 
         # Initialize or update union base from current state
         # This is critical: we need to check if base_masks_storage has been updated
@@ -434,47 +416,25 @@ async def segment_union(
                     print(f"✅ Updated union base to include rectangle removals from base_masks_storage")
                     print(f"   Pixels removed: {np.count_nonzero(current_union) - np.count_nonzero(updated_union_base)}")
 
-        print(f"⏳ Preparing to predict with point at ({x}, {y})...")
+        predictor.set_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+
         point_coords = np.array([[x, y]])
         point_labels = np.array([1])
 
-        # Prepare mask_input if we have an existing mask
-        mask_input = None
-        if image_key in union_masks_storage:
-            previous_mask = union_masks_storage[image_key]
-            # SAM2 expects mask_input in shape (1, H, W) with float values
-            mask_input = previous_mask[np.newaxis, :, :].astype(np.float32)
-            print(f"✅ Using previous mask as input (shape: {mask_input.shape}, non-zero: {np.count_nonzero(previous_mask)})")
-
-        print(f"⏳ Running SAM2 prediction...")
         with torch.no_grad():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 masks, scores, _ = predictor.predict(
                     point_coords=point_coords,
                     point_labels=point_labels,
-                    mask_input=mask_input,
                     box=None,
                     multimask_output=True
                 )
                 best_mask_index = np.argmax(scores)
                 current_mask = masks[best_mask_index].astype(np.uint8)
-        
-        print(f"✅ SAM2 prediction completed successfully")
-        print(f"Current mask shape: {current_mask.shape}")
-        
-        # Ensure mask dimensions match the original image
-        if current_mask.shape != (image_bgr.shape[0], image_bgr.shape[1]):
-            print(f"⚠️ Mask shape mismatch! Resizing from {current_mask.shape} to {(image_bgr.shape[0], image_bgr.shape[1])}")
-            current_mask = cv2.resize(current_mask, (image_bgr.shape[1], image_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
-            print(f"✅ Mask resized to match image dimensions")
-        
-        # Clear CUDA cache to prevent memory buildup
-        torch.cuda.empty_cache()
 
         if point_count == 1:
             if image_key in union_masks_storage:
                 previous_mask = union_masks_storage[image_key]
-                print(f"Previous mask shape: {previous_mask.shape}, Current mask shape: {current_mask.shape}")
                 union_mask = np.logical_or(previous_mask, current_mask).astype(np.uint8)
                 union_masks_storage[image_key] = union_mask
             else:
@@ -482,7 +442,6 @@ async def segment_union(
         else:
             if image_key in union_masks_storage:
                 previous_mask = union_masks_storage[image_key]
-                print(f"Previous mask shape: {previous_mask.shape}, Current mask shape: {current_mask.shape}")
                 union_mask = np.logical_or(previous_mask, current_mask).astype(np.uint8)
                 union_masks_storage[image_key] = union_mask
             else:
@@ -490,8 +449,6 @@ async def segment_union(
 
         final_mask = union_masks_storage[image_key]
 
-        # ALWAYS update both final_masks_storage AND base_masks_storage
-        # This ensures subsequent operations (including other points) see the accumulated union state
         final_masks_storage[image_key] = final_mask.copy()
         base_masks_storage[image_key] = final_mask.copy()
         print(f"✅ Updated both final_masks_storage and base_masks_storage with union result")
@@ -552,9 +509,7 @@ async def segment_intersection(
             best_mask_index = np.argmax(scores)
             negative_mask = masks[best_mask_index].astype(np.uint8)
 
-    # Initialize or update base mask for intersection
     if point_count == 1:
-        # First negative point - initialize base
         if image_key in final_masks_storage:
             base_mask = final_masks_storage[image_key]
             base_masks_storage[image_key] = base_mask

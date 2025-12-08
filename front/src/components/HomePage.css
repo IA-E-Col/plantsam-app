@@ -155,7 +155,6 @@
   font-size: 0.85rem;
 }
 
-/* Modal Styles */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -357,7 +356,6 @@
   box-shadow: none;
 }
 
-/* Delete Confirmation Dialog */
 .delete-confirm-dialog {
   background: white;
   border-radius: 8px;
@@ -398,7 +396,6 @@
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-/* Loading Dialog */
 .loading-dialog {
   background: white;
   border-radius: 8px;
@@ -430,7 +427,6 @@
   100% { transform: rotate(360deg); }
 }
 
-/* Responsive Design */
 @media (max-width: 768px) {
   .home-page {
     padding: 1rem;
