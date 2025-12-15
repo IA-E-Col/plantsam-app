@@ -24,7 +24,7 @@ The tool is designed for:
 - Interactive correction of masks using **point prompts**
 - Image-by-image refinement workflow
 - Export of corrected masks for retraining or evaluation
-- Lightweight interface (Streamlit-based)
+- Lightweight interface.
 
 ## Installation and Configuration
 
