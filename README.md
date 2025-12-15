@@ -20,9 +20,16 @@ The tool is designed for:
 
 ## Key Features
 
+- Project manager to have control over multiple data sets on one interface
 - Automatic pre-segmentation using the PlantSAM2 pipeline
+- Allows to start the correction from the PlantSAM2 output or to start from scratch
 - Interactive correction of masks using **point prompts**
+   - Positive points to add elements to the mask
+   - Negative points to remove elements to the mask
+- Option to manually set areas to remove from the final mask by setting user placed rectangles on the image
+- Allows to set a new final mask by applying algorithms between different steps of the correction
 - Image-by-image refinement workflow
+- Automatic saving of the masks by following a structure based on each project
 - Export of corrected masks for retraining or evaluation
 - Lightweight interface.
 
