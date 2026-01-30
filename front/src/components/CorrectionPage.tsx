@@ -1,14 +1,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import './CorrectionPage.css'
 
-// Modifier l'interface Point pour inclure les coordonnées relatives
 interface Point {
-    x: number; // coordonnée d'affichage
-    y: number; // coordonnée d'affichage
+    x: number;
+    y: number;
     type: 'positive' | 'negative';
     id: number;
-    relX: number; // coordonnée relative (0-1)
-    relY: number; // coordonnée relative (0-1)
+    relX: number;
+    relY: number;
 }
 
 interface Rectangle {
@@ -25,7 +24,7 @@ interface Rectangle {
 interface SegmentationStep {
     id: number;
     imageUrl: string;
-    blob: Blob;  // Store the actual blob data for algorithm operations
+    blob: Blob;
     stepName: string;
     timestamp: Date;
 }
@@ -39,10 +38,6 @@ interface CorrectionPageProps {
 function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const [currentImageIndex, setCurrentImageIndex] = useState(0)
     const [imagesList, setImagesList] = useState<File[]>(images)
-    // Track backend indices for each image in the list
-    // This is needed because when images are deleted from the frontend list,
-    // the backend still uses the original sequential indices (0, 1, 2, etc.)
-    // backendIndices[i] tells us which backend file index corresponds to frontend position i
     const [backendIndices, setBackendIndices] = useState<number[]>(images.map((_, i) => i))
     const [pointType, setPointType] = useState<'positive' | 'negative'>('positive')
     const [algoType, setAlgoType] = useState<'union' | 'intersection' | 'iou'>('union')
@@ -77,7 +72,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [processedImages, setProcessedImages] = useState<Set<number>>(new Set());
     const imagesListRef = useRef<HTMLDivElement>(null);
-    const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 }); // Show first 50 by default
+    const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
+    
+    const [maskHistory, setMaskHistory] = useState<Blob[]>([]);
 
 
     const currentImage = imagesList[currentImageIndex]
@@ -160,12 +157,10 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
     let imageLoadLogCount = 0;
 
-    // Calcul de position avec mémoïsation et prévention des mises à jour inutiles
     const calculateImagePosition = useCallback(() => {
         if (!imageRef.current) return;
 
         const img = imageRef.current;
-        // Utiliser le wrapper non transformé (parent du conteneur de zoom)
         const zoomContainer = img.parentElement;
         const container = zoomContainer?.parentElement;
         if (!container) return;
@@ -184,7 +179,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         const offsetY = (containerHeight - displayedHeight) / 2;
 
         setImageDisplayInfo(prev => {
-            // Éviter les mises à jour inutiles
             if (prev &&
                 prev.displayedWidth === displayedWidth &&
                 prev.displayedHeight === displayedHeight &&
@@ -213,7 +207,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         calculateImagePosition();
     }, [calculateImagePosition]);
 
-    // Gestion du resize - version corrigée
     useEffect(() => {
         const handleResize = () => {
             if (isImageLoaded) {
@@ -225,7 +218,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         return () => window.removeEventListener('resize', handleResize);
     }, [isImageLoaded, calculateImagePosition]);
 
-    // Nettoyage des URLs
+    // Cleaning URLs
     useEffect(() => {
         return () => {
             if (processedImageUrl) URL.revokeObjectURL(processedImageUrl);
@@ -234,7 +227,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         };
     }, [processedImageUrl, initialSegmentationUrl, segmentationSteps]);
 
-    // Tente de charger un résultat existant sans réinitialiser le serveur (utile après Full Segmentation depuis Home)
     const tryLoadExistingProcessed = useCallback(async (): Promise<boolean> => {
         if (!groupId) return false;
         try {
@@ -270,7 +262,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         setProcessedImages(prev => new Set(prev).add(backendIdx));
     }, [currentBackendIndex]);
 
-    // Effet d'initialisation PRINCIPAL - UN SEUL
     useEffect(() => {
         if (!groupId || images.length === 0) return;
 
@@ -291,7 +282,7 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 setIsImageLoaded(false);
             }
 
-            // Nettoyer les URLs précédentes de manière sécurisée
+            // Clean URLs
             if (isMounted) {
                 if (processedImageUrl) {
                     URL.revokeObjectURL(processedImageUrl);
@@ -309,16 +300,13 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                     setSegmentationSteps([]);
                 }
 
-                // Charger la segmentation initiale
                 await loadInitialSegmentation();
 
                 if (!hasExisting) {
-                    // Si aucun résultat existant, reset côté serveur puis charger
                     await resetServerState();
                     await loadProcessedImage();
                     await pollProcessedImage(60, 1000);
                 } else {
-                    // On a déjà un résultat: éventuellement compléter par polling pour éviter cache
                     await pollProcessedImage(10, 500);
                 }
 
@@ -334,7 +322,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         };
     }, [groupId, currentBackendIndex, loadProcessedIndices, tryLoadExistingProcessed]);
 
-    // Debug: surveiller les changements de l'URL traitée
     useEffect(() => {
         console.log('🔍 processedImageUrl a changé:', {
             hasUrl: !!processedImageUrl,
@@ -343,7 +330,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         });
     }, [processedImageUrl, isLoading]);
 
-    // Réinitialiser le zoom quand l'image change
     useEffect(() => {
         setZoomScale(1);
         setZoomPosition({ x: 0, y: 0 });
@@ -434,8 +420,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         }
     };
 
-    // Note: We no longer save step images to the backend (only final masks are persisted)
-    // This function is kept for backward compatibility but does nothing
     const saveStepImage = async (imageBlob: Blob, stepName: string) => {
         // Step images are now only kept in memory for UI history
         // Final masks are automatically saved by the backend on each operation
@@ -661,8 +645,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const getDisplayCoordinates = useCallback((relX: number, relY: number) => {
         if (!imageDisplayInfo) return { x: 0, y: 0 };
 
-        // Toujours retourner les coordonnées de base sans transformation de zoom
-        // pour que les points restent fixes visuellement
         return {
             x: relX * imageDisplayInfo.displayedWidth + imageDisplayInfo.offsetX,
             y: relY * imageDisplayInfo.displayedHeight + imageDisplayInfo.offsetY
@@ -687,10 +669,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
         // Inverser la transformation appliquée au conteneur de zoom
         if (zoomScale > 1) {
-            // Modèle direct (avec transform: scale(...) translate(...)):
-            // screen = center + zoomScale * (local - center) + zoomPosition
-            // Inversion:
-            // local = center + (screen - center - zoomPosition) / zoomScale
             adjustedX = containerCenterX + (clickX - containerCenterX - zoomPosition.x) / zoomScale;
             adjustedY = containerCenterY + (clickY - containerCenterY - zoomPosition.y) / zoomScale;
         }
@@ -715,34 +693,67 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         setSelectedStepId(stepId);
     };
 
-    const undoLastPoint = async () => {
-        if (points.length === 0) return;
+    const undoLastAction = async () => {
+        if (maskHistory.length === 0) {
+            console.log('No history to undo');
+            return;
+        }
 
-        const newPoints = points.slice(0, -1);
-        setPoints(newPoints);
-
-        if (newPoints.length === 0) {
-            // No points left, just clear
-            await clearPoints();
-        } else {
-            // Rebuild state by clearing and reapplying all remaining points
-            setIsLoading(true);
-            try {
-                // Clear points on backend
-                await fetch(
-                    `/api/files/group/${groupId}/${currentBackendIndex}/clear_points`,
-                    { method: 'POST' }
-                );
-
-                // Reapply all remaining points incrementally
-                for (const point of newPoints) {
-                    await applyNewPoint(point);
+        console.log(`\n🔄 UNDO: Restoring mask (${maskHistory.length} in history)`);
+        setIsLoading(true);
+        try {
+            // Get the previous mask from history
+            const previousMask = maskHistory[maskHistory.length - 1];
+            console.log('📥 Retrieved previous mask from history, size:', previousMask.size);
+            
+            // Remove the last entry from history
+            setMaskHistory(prev => prev.slice(0, -1));
+            
+            // Send the previous mask to the backend to restore it
+            const arrayBuffer = await previousMask.arrayBuffer();
+            console.log('📤 Sending mask to Java backend for disk storage...');
+            const response = await fetch(
+                `/api/files/group/${groupId}/${currentBackendIndex}/restore_mask`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/octet-stream'
+                    },
+                    body: arrayBuffer
                 }
-            } catch (error) {
-                console.error('Error during undo:', error);
-            } finally {
-                setIsLoading(false);
+            );
+
+            if (!response.ok) {
+                throw new Error('Failed to restore previous mask');
             }
+
+            const blob = await response.blob();
+            console.log('✅ Java backend restored mask successfully');
+            
+            // Update the displayed image
+            if (processedImageUrl) {
+                URL.revokeObjectURL(processedImageUrl);
+            }
+            const url = URL.createObjectURL(blob);
+            setProcessedImageUrl(url);
+            console.log('✅ UI updated with restored mask');
+            
+            // CRITICAL: Update the Python backend's internal state with the restored mask
+            // This ensures subsequent operations work with the restored mask
+            console.log('📤 Updating Python backend internal state...');
+            await updatePythonBackendState(blob);
+            
+            // Clear any in-progress points or rectangles since we've gone back to a previous state
+            setPoints([]);
+            setRectangles([]);
+            console.log('🧹 Cleared points and rectangles');
+            
+            console.log('✅ UNDO complete - all backends synchronized');
+        } catch (error) {
+            console.error('❌ Error during undo:', error);
+            alert(`Failed to undo: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -775,7 +786,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         try {
             console.log('=== DÉBUT TÉLÉCHARGEMENT ===');
 
-            // Méthode 1: Télécharger directement depuis l'API
             const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`);
 
             if (!response.ok) {
@@ -789,7 +799,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
                 throw new Error('Blob vide reçu du serveur');
             }
 
-            // Créer une URL blob pour le téléchargement
             const url = URL.createObjectURL(blob);
 
             const a = document.createElement('a');
@@ -803,7 +812,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             document.body.appendChild(a);
             a.click();
 
-            // Nettoyer après un délai
             setTimeout(() => {
                 URL.revokeObjectURL(url);
                 document.body.removeChild(a);
@@ -814,7 +822,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         } catch (error) {
             console.error('Erreur lors du téléchargement:', error);
 
-            // Méthode de fallback
             try {
                 if (processedImageUrl && processedImageUrl.startsWith('blob:')) {
                     const a = document.createElement('a');
@@ -836,12 +843,10 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         try {
             console.log('Réinitialisation de l\'état serveur...');
 
-            // Réinitialiser les points
             await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/clear_points`, {
                 method: 'POST'
             });
 
-            // Réinitialiser les rectangles
             await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/clear_rectangles`, {
                 method: 'POST'
             });
@@ -858,7 +863,6 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
             return;
         }
         setIsDrawingRect(true);
-        // NE PAS réinitialiser les points : retirer setPoints([]);
     };
 
     const handleZoomIn = () => {
@@ -1067,14 +1071,14 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
     const getZoomStyle = () => {
         if (zoomScale === 1) {
             return {
-                position: 'relative' // ← Ajouter même quand pas de zoom
+                position: 'relative'
             };
         }
         return {
             transform: `translate(${zoomPosition.x}px, ${zoomPosition.y}px) scale(${zoomScale})`,
             transformOrigin: 'center center',
             cursor: isDragging ? 'grabbing' : 'grab',
-            position: 'relative' // ← Ajouter cette ligne
+            position: 'relative'
         };
     };
 
@@ -1091,6 +1095,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
         setIsLoading(true);
         try {
+            // Save current mask to history before applying rectangle
+            await saveCurrentMaskToHistory();
+            
             const img = imageRef.current;
             if (!img) return;
 
@@ -1157,6 +1164,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
         setIsLoading(true);
         try {
+            // Save current mask to history before applying point
+            await saveCurrentMaskToHistory();
+            
             const img = imageRef.current;
             if (!img) return;
 
@@ -1252,6 +1262,55 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
         }
     };
 
+    // Helper function to update Python backend's internal mask state
+    const updatePythonBackendState = async (maskBlob: Blob) => {
+        if (!currentImage) return;
+        
+        try {
+            // Create a FormData with the mask blob using the ORIGINAL IMAGE FILENAME
+            // This is critical - the Python backend uses file.filename as the key in its storage
+            const formData = new FormData();
+            formData.append('file', maskBlob, currentImage.name);
+            
+            console.log(`📤 Updating Python backend state for: ${currentImage.name}`);
+            
+            const response = await fetch('http://localhost:8000/restore_mask_state', {
+                method: 'POST',
+                body: formData
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                console.log('✅ Python backend state updated:', result);
+            } else {
+                console.error('⚠️ Failed to update Python backend state:', response.status);
+            }
+        } catch (error) {
+            console.error('❌ Error updating Python backend state:', error);
+            // Don't throw - the operation can still work, just might have issues with next operation
+        }
+    };
+
+    // Helper function to save the current mask state to history
+    const saveCurrentMaskToHistory = async () => {
+        if (!groupId) return;
+        
+        try {
+            // Fetch the current mask from backend
+            const response = await fetch(`/api/files/group/${groupId}/${currentBackendIndex}/result`);
+            if (response.ok) {
+                const blob = await response.blob();
+                if (blob.size > 0) {
+                    setMaskHistory(prev => [...prev, blob]);
+                    console.log('💾 Saved current mask to history');
+                }
+            }
+        } catch (error) {
+            console.error('Failed to save mask to history:', error);
+            // Don't throw - we still want the operation to continue
+        }
+    };
+
     const previousImageUrl = useCallback(() => {
         if (selectedStepId) {
             const step = segmentationSteps.find(step => step.id === selectedStepId);
@@ -1273,6 +1332,9 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
         setIsLoading(true);
         try {
+            // Save current mask to history before applying algorithm
+            await saveCurrentMaskToHistory();
+            
             console.log('Applying algorithm:', algoType);
 
             // Get the previous mask to use for the algorithm
@@ -1740,19 +1802,14 @@ function CorrectionPage({ images, groupId, onBack }: CorrectionPageProps) {
 
                                 <button
                                     className="control-button undo-button"
-                                    onClick={undoLastPoint}
-                                    disabled={points.length === 0}
+                                    onClick={undoLastAction}
+                                    disabled={isLoading || maskHistory.length === 0}
+                                    title={maskHistory.length > 0 ? `Undo (${maskHistory.length} actions available)` : 'No actions to undo'}
                                 >
-                                    Undo point
+                                    Undo
                                 </button>
+        
 
-                                <button
-                                    className="control-button clear-button"
-                                    onClick={clearPoints}
-                                    disabled={points.length === 0}
-                                >
-                                    Clear all points
-                                </button>
 
                                 <button
                                     className="control-button download-button"

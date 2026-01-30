@@ -339,4 +339,23 @@ public class FileController {
             return ResponseEntity.badRequest().body(null);
         }
     }
+
+    @PostMapping("/group/{groupId}/{fileId}/restore_mask")
+    public ResponseEntity<byte[]> restoreMask(@PathVariable("groupId") String groupId,
+                                              @PathVariable("fileId") int fileId,
+                                              @RequestBody byte[] maskData) throws IOException {
+        try {
+            if (fileService.restoreMask(groupId, fileId, maskData)) {
+                byte[] imageData = fileService.getProcessedImage(groupId, fileId);
+                if (imageData != null) {
+                    return ResponseEntity.ok()
+                            .header("Content-Type", "image/png")
+                            .body(imageData);
+                }
+            }
+            return ResponseEntity.badRequest().body(null);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(null);
+        }
+    }
 }

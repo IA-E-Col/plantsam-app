@@ -14,8 +14,17 @@ import hydra
 from omegaconf import OmegaConf
 from typing import List, Tuple
 import json
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 device = "cuda"
 
@@ -82,7 +91,6 @@ async def process_endpoint(file: UploadFile = File(...)):
         print(f"❌ Erreur dans process_endpoint: {str(e)}")
         import traceback
         traceback.print_exc()
-        # Retourner une image noire en cas d'erreur
         blank_image = Image.new('RGB', (100, 100), color='black')
         buf = io.BytesIO()
         blank_image.save(buf, format="PNG")
@@ -261,7 +269,7 @@ async def segment_with_points(
 
                 # Update both storages with the new combined mask
                 final_masks_storage[image_key] = final_mask.copy()
-                base_masks_storage[image_key] = final_mask.copy()  # Important: keep base mask updated for future operations
+                base_masks_storage[image_key] = final_mask.copy()
 
         mask_rgb = np.stack((final_mask,) * 3, axis=-1)
         segmented = np.where(mask_rgb != 0, image_bgr, 0)
@@ -373,14 +381,17 @@ async def segment_union(
 
         print(f"\n=== SEGMENT UNION DEBUG ===")
         print(f"Point: ({x}, {y}), Count: {point_count}, Start type: {start_type}")
+        print(f"Image key: {image_key}")
         print(f"Storage state:")
         print(f"- final_masks_storage has key: {image_key in final_masks_storage}")
         print(f"- base_masks_storage has key: {image_key in base_masks_storage}")
         print(f"- union_masks_storage has key: {image_key in union_masks_storage}")
         if image_key in final_masks_storage:
-            print(f"- final_mask values: {np.unique(final_masks_storage[image_key])}")
+            mask_pixels = np.count_nonzero(final_masks_storage[image_key])
+            print(f"- final_mask: {mask_pixels} pixels, values: {np.unique(final_masks_storage[image_key])}")
         if image_key in base_masks_storage:
-            print(f"- base_mask values: {np.unique(base_masks_storage[image_key])}")
+            mask_pixels = np.count_nonzero(base_masks_storage[image_key])
+            print(f"- base_mask: {mask_pixels} pixels, values: {np.unique(base_masks_storage[image_key])}")
 
         # Initialize or update union base from current state
         # This is critical: we need to check if base_masks_storage has been updated
@@ -996,6 +1007,62 @@ async def apply_iou(file: UploadFile = File(...), previous_mask: UploadFile = Fi
 
     except Exception as e:
         print(f"❌ Error in apply_iou: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+
+@app.post("/restore_mask_state")
+async def restore_mask_state(file: UploadFile = File(...)):
+    """
+    Restore the internal mask state after an undo operation.
+    This ensures that subsequent operations work with the restored mask.
+    """
+    try:
+        image_bytes = await file.read()
+        image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+        
+        base_filename = file.filename
+        
+        print(f"\n=== RESTORE MASK STATE (UNDO) ===")
+        print(f"Received filename: {base_filename}")
+        
+        image_key = None
+        for key in list(final_masks_storage.keys()) + list(base_masks_storage.keys()) + list(initial_masks_storage.keys()):
+            if key == base_filename or key.startswith(base_filename.rsplit('.', 1)[0] + '_'):
+                image_key = key
+                print(f"✅ Found matching key in storage: {image_key}")
+                break
+        
+        if not image_key:
+            image_key = base_filename
+            print(f"⚠️  No matching key found, using: {image_key}")
+        
+        # Convert the RGB image to a binary mask
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        _, mask = cv2.threshold(gray, 1, 1, cv2.THRESH_BINARY)
+        
+        # Update all storage dictionaries to the restored state
+        final_masks_storage[image_key] = mask.copy()
+        base_masks_storage[image_key] = mask.copy()
+        
+        # Clear algorithm-specific storages to ensure clean state
+        if image_key in union_masks_storage:
+            del union_masks_storage[image_key]
+        if image_key in intersection_masks_storage:
+            del intersection_masks_storage[image_key]
+        if image_key in iou_masks_storage:
+            del iou_masks_storage[image_key]
+        
+        print(f"✅ Mask state restored successfully")
+        print(f"   Mask shape: {mask.shape}, unique values: {np.unique(mask)}")
+        print(f"   Storage keys updated: final_masks_storage, base_masks_storage")
+        print(f"   Cleared: union_masks_storage, intersection_masks_storage, iou_masks_storage")
+        
+        return {"status": "success", "message": "Mask state restored", "mask_shape": str(mask.shape), "unique_values": np.unique(mask).tolist()}
+        
+    except Exception as e:
+        print(f"❌ Error restoring mask state: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}

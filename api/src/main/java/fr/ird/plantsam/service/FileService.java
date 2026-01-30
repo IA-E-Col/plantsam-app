@@ -36,8 +36,8 @@ public class FileService {
         
         // Configure RestTemplate with timeouts
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(10000); // 10 seconds connection timeout
-        factory.setReadTimeout(120000);   // 120 seconds read timeout (for large images)
+        factory.setConnectTimeout(10000);
+        factory.setReadTimeout(120000);
         this.restTemplate = new RestTemplate(factory);
 
         try {
@@ -216,6 +216,52 @@ public class FileService {
                 .reduce((a, b) -> a + "," + b)
                 .orElse("");
         Files.writeString(processedFile, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    }
+    
+    /**
+     * Gets the path to the info file for a specific image, creating the infos directory if needed
+     */
+    private Path getInfoFilePath(String groupId, int fileIndex) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null || group.getProjectDirPath() == null) {
+            throw new IOException("Group not found or project directory not set");
+        }
+        
+        // Create infos directory if it doesn't exist
+        Path infosDir = group.getProjectDirPath().resolve("infos");
+        if (!Files.exists(infosDir)) {
+            Files.createDirectories(infosDir);
+        }
+        
+        // Get the original file name to create corresponding info file name
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) {
+            throw new IOException("Original file not found for index: " + fileIndex);
+        }
+        
+        String fileName = Paths.get(originalFilePath).getFileName().toString();
+        String baseName = FilenameUtils.removeExtension(fileName);
+        String infoFileName = baseName + ".txt";
+        
+        return infosDir.resolve(infoFileName);
+    }
+    
+    /**
+     * Logs a correction action to the info file for a specific image
+     */
+    private void logCorrection(String groupId, int fileIndex, String correctionLine) {
+        try {
+            Path infoFile = getInfoFilePath(groupId, fileIndex);
+            
+            // Append the correction line to the file
+            Files.writeString(infoFile, correctionLine + "\n", 
+                StandardOpenOption.CREATE, 
+                StandardOpenOption.APPEND);
+            
+            System.out.println("✅ Logged correction to: " + infoFile);
+        } catch (IOException e) {
+            System.err.println("❌ Failed to log correction: " + e.getMessage());
+        }
     }
     
     /**
@@ -415,6 +461,11 @@ public class FileService {
             if (response.getStatusCode() == HttpStatus.OK) {
                 // Save final mask to segmented folder (no intermediate storage)
                 saveFinalMask(group, fileIndex, response.getBody(), originalFilePath);
+                
+                // Log the point correction
+                String pointType = positive ? "positive_point" : "negative_point";
+                logCorrection(groupId, fileIndex, pointType + " " + x + "," + y);
+                
                 return true;
             }
         } catch (Exception e) {
@@ -531,6 +582,14 @@ public class FileService {
                 // Mark image as processed
                 markImageAsProcessed(groupId, fileIndex);
                 
+                // Log all points
+                if (positivePoints != null && !positivePoints.equals("[]")) {
+                    logCorrection(groupId, fileIndex, "positive_points " + positivePoints);
+                }
+                if (negativePoints != null && !negativePoints.equals("[]")) {
+                    logCorrection(groupId, fileIndex, "negative_points " + negativePoints);
+                }
+                
                 return true;
             }
         } catch (Exception e) {
@@ -580,6 +639,9 @@ public class FileService {
                 
                 // Mark image as processed
                 markImageAsProcessed(groupId, fileIndex);
+                
+                // Log the union point
+                logCorrection(groupId, fileIndex, "union_point " + x + "," + y);
                 
                 return true;
             } else {
@@ -636,6 +698,9 @@ public class FileService {
                 
                 // Mark image as processed
                 markImageAsProcessed(groupId, fileIndex);
+                
+                // Log the intersection point
+                logCorrection(groupId, fileIndex, "intersection_point " + x + "," + y);
                 
                 return true;
             }
@@ -729,6 +794,19 @@ public class FileService {
                 
                 // Mark image as processed
                 markImageAsProcessed(groupId, fileIndex);
+                
+                // Log the rectangle removal with all four corners
+                int x1 = x;
+                int y1 = y;
+                int x2 = x + width;
+                int y2 = y;
+                int x3 = x + width;
+                int y3 = y + height;
+                int x4 = x;
+                int y4 = y + height;
+                logCorrection(groupId, fileIndex, 
+                    "rectangle " + x1 + "," + y1 + " " + x2 + "," + y2 + " " + 
+                    x3 + "," + y3 + " " + x4 + "," + y4);
                 
                 return true;
             }
@@ -948,6 +1026,30 @@ public class FileService {
             Files.deleteIfExists(tempPreviousMask);
         }
         return false;
+    }
+
+    public boolean restoreMask(String groupId, int fileIndex, byte[] maskData) throws IOException {
+        FileGroup group = fileGroups.get(groupId);
+        if (group == null) return false;
+
+        String originalFilePath = group.getOriginalFilePath(fileIndex);
+        if (originalFilePath == null) return false;
+
+        System.out.println("Restoring previous mask for undo operation");
+
+        try {
+            // Save the provided mask data directly to the segmented folder
+            saveFinalMask(group, fileIndex, maskData, originalFilePath);
+            
+            // Mark image as processed
+            markImageAsProcessed(groupId, fileIndex);
+            
+            System.out.println("✅ Mask restored successfully");
+            return true;
+        } catch (Exception e) {
+            System.err.println("Error restoring mask: " + e.getMessage());
+            return false;
+        }
     }
 
     private static class FileGroup {
